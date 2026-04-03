@@ -12,7 +12,7 @@ The ingestion layer simulates real-time data flow by streaming row-level observa
 - **Docker Compose**: Orchestrates all services.
 
 ### Components
-- `producer.py`: Streams `observations-2026-4-3.csv` to the `water-quality-raw` Kafka topic.
+- `producer.py`: Streams `observations-2026-4-3-sorted.csv` to the `water-quality-raw` Kafka topic.
   - Efficiently uses `csv.DictReader` for low memory footprint.
   - Simulates real-time ingestion with a configurable delay (default ~100 rows/sec).
   - Handles 1.8M rows of historical data.

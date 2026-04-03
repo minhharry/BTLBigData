@@ -6,7 +6,7 @@ Source: https://environment.data.gov.uk/water-quality
 import pandas as pd
 import json
 
-CSV_PATH = "data/observations-2026-4-3.csv"
+CSV_PATH = "data/observations-2026-4-3-sorted.csv"
 
 print("=" * 70)
 print("UK WATER QUALITY OBSERVATIONS - DATA ANALYSIS")

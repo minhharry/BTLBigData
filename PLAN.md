@@ -23,7 +23,7 @@ This project builds an **end-to-end Big Data pipeline** that ingests, transforms
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        DATA SOURCE                              │
-│  observations-2026-4-3.csv (741MB, 1.8M rows)                  │
+│  observations-2026-4-3-sorted.csv (741MB, 1.8M rows)                  │
 └──────────────────────┬──────────────────────────────────────────┘
                        │
                        ▼
@@ -280,7 +280,7 @@ btlbigdata/
 ├── spark_utils.py              # Helper functions (UDFs, WQI calc, etc.)
 ├── init_db.sql                 # PostgreSQL schema initialization
 ├── main.ipynb                  # Jupyter notebook for exploration
-├── observations-2026-4-3.csv   # Raw data (741MB)
+├── observations-2026-4-3-sorted.csv   # Raw data (741MB)
 ├── PLAN.md                     # This file
 └── README.md                   # Project documentation
 ```

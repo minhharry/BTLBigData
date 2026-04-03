@@ -8,7 +8,7 @@ from kafka.errors import NoBrokersAvailable
 # CONFIGURATION
 BOOTSTRAP_SERVERS = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092').split(',')
 TOPIC_NAME = 'water-quality-raw'
-CSV_FILE_PATH = 'data/observations-2026-4-3.csv'
+CSV_FILE_PATH = 'data/observations-2026-4-3-sorted.csv'
 BATCH_SIZE = 100  # Number of messages before flushing
 DELAY_SECONDS = 0.01  # Small delay between messages (100 rows/sec)
 
