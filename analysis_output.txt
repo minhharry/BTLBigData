@@ -1,0 +1,416 @@
+======================================================================
+UK WATER QUALITY OBSERVATIONS - DATA ANALYSIS
+======================================================================
+
+[1] Loading data (this may take a moment for ~1.8M rows)...
+    Total rows: 1,808,301
+    Total columns: 17
+    Columns: ['id', 'samplingPoint.notation', 'samplingPoint.prefLabel', 'samplingPoint.longitude', 'samplingPoint.latitude', 'samplingPoint.region', 'samplingPoint.area', 'samplingPoint.subArea', 'samplingPoint.samplingPointStatus', 'samplingPoint.samplingPointType', 'phenomenonTime', 'samplingPurpose', 'sampleMaterialType', 'determinand.notation', 'determinand.prefLabel', 'result', 'unit']
+
+[2] Data types:
+    id: str  (nulls: 0)
+    samplingPoint.notation: str  (nulls: 0)
+    samplingPoint.prefLabel: str  (nulls: 0)
+    samplingPoint.longitude: float64  (nulls: 0)
+    samplingPoint.latitude: float64  (nulls: 0)
+    samplingPoint.region: str  (nulls: 0)
+    samplingPoint.area: str  (nulls: 0)
+    samplingPoint.subArea: str  (nulls: 0)
+    samplingPoint.samplingPointStatus: str  (nulls: 0)
+    samplingPoint.samplingPointType: str  (nulls: 0)
+    phenomenonTime: str  (nulls: 0)
+    samplingPurpose: str  (nulls: 0)
+    sampleMaterialType: str  (nulls: 0)
+    determinand.notation: int64  (nulls: 0)
+    determinand.prefLabel: str  (nulls: 0)
+    result: str  (nulls: 0)
+    unit: str  (nulls: 0)
+
+[3] Time range:
+    Earliest observation: 2025-04-04 06:20:00
+    Latest observation:   2026-02-26 13:26:00
+
+[4] Regional coverage:
+    Number of regions: 7
+    SouthWest: 378,127 observations (20.9%)
+    NorthEast: 277,790 observations (15.4%)
+    Anglian: 267,062 observations (14.8%)
+    NorthWest: 246,326 observations (13.6%)
+    Midlands: 235,383 observations (13.0%)
+    Southern: 216,089 observations (11.9%)
+    Thames: 187,524 observations (10.4%)
+
+[5] Top 15 areas by observation count:
+    SOUTH WEST - DEVON AND CORNWALL: 251,356
+    NORTH WEST - CUMBRIA AND LANCASHIRE: 166,814
+    NORTH EAST - NORTHUMBERLAND DURHAM AND TEES: 139,772
+    NORTH EAST - YORKSHIRE: 137,982
+    SOUTHERN - SOLENT AND SOUTH DOWNS: 132,174
+    SOUTH WEST - WESSEX: 126,771
+    THAMES - WEST THAMES: 113,968
+    ANGLIAN - LINCS AND NORTHANTS: 101,863
+    ANGLIAN - ESSEX NORFOLK AND SUFFOLK: 93,768
+    MIDLANDS - SHROPS HEREF WORCS AND GLOS: 93,036
+    SOUTHERN - KENT AND SOUTH LONDON: 83,885
+    MIDLANDS - DERBYS NOTTS AND LEICS: 83,550
+    NORTH WEST - GTR MANCS MERSEY AND CHES: 79,512
+    ANGLIAN - CAMBS AND BEDFORDSHIRE: 70,712
+    MIDLANDS - STAFFS WARKS AND WEST MIDS: 58,797
+
+[6] Sampling point types:
+    FRESHWATER - RIVERS: 935,195 (51.7%)
+    SEWAGE DISCHARGES - FINAL/TREATED EFFLUENT - WATER COMPANY: 169,039 (9.3%)
+    GROUNDWATER - BOREHOLE: 121,726 (6.7%)
+    SALINE WATER - DESIGNATED BATHING BEACHES: 115,234 (6.4%)
+    FRESHWATER - LAKES/PONDS/RESERVOIRS: 109,495 (6.1%)
+    FRESHWATER - UNSPECIFIED: 70,551 (3.9%)
+    SALINE WATER - ESTUARINE SITES - NON BATHING/SHELLFISH: 53,653 (3.0%)
+    POLLUTION/INVESTIGATION POINTS - ENVIRONMENT: 31,515 (1.7%)
+    GROUNDWATER - SPRING: 31,408 (1.7%)
+    SALINE WATER - COASTAL SITES - NON BATHING/SHELLFISH: 30,698 (1.7%)
+    SEWAGE - CRUDE TO FURTHER TREATMENT - WATER COMPANY: 24,968 (1.4%)
+    FRESHWATER - BATHING WATER: 15,592 (0.9%)
+    SALINE WATER - DESIGNATED SHELLFISHERIES: 11,390 (0.6%)
+    SEWAGE DISCHARGES - FINAL/TREATED EFFLUENT - NOT WATER COMPANY: 10,229 (0.6%)
+    GROUNDWATER - WELLS & ADITS: 9,805 (0.5%)
+    MINEWATER: 8,162 (0.5%)
+    FRESHWATER - COMPARATIVE INLET POINTS: 6,981 (0.4%)
+    TRADE DISCHARGES - PROCESS EFFLUENT - NOT WATER COMPANY: 6,659 (0.4%)
+    AGRICULTURE - FISH FARMING - NOT WATER COMPANY: 4,241 (0.2%)
+    SEWAGE DISCHARGES - STW STORM OVERFLOW/STORM TANK - WATER COMPANY: 4,183 (0.2%)
+    TRADE DISCHARGES - PROCESS EFFLUENT - WATER COMPANY (WTW): 3,949 (0.2%)
+    SALINE WATER - NON DESIGNATED BATHING BEACHES: 3,775 (0.2%)
+    MISCELLANEOUS ENVIRONMENT - UNSPECIFIED: 2,432 (0.1%)
+    FRESHWATER - CANALS: 2,199 (0.1%)
+    GROUNDWATER - UNSPECIFIED: 2,167 (0.1%)
+    POLLUTION/INVESTIGATION POINTS - WASTE: 1,852 (0.1%)
+    AGRICULTURE - WATER CRESS FARMING: 1,820 (0.1%)
+    MISCELLANEOUS DISCHARGES - SURFACE WATER: 1,756 (0.1%)
+    TRADE DISCHARGES - MINERAL WORKINGS: 1,706 (0.1%)
+    TRADE DISCHARGES - SITE DRAINAGE: 1,632 (0.1%)
+    SEWAGE & TRADE COMBINED - UNSPECIFIED: 1,621 (0.1%)
+    GROUNDWATER - COMPOSITE: 1,342 (0.1%)
+    WASTE SITE - INDUSTRIAL LANDFILL: 1,321 (0.1%)
+    WASTE SITE - GAS & GROUNDWATER: 1,257 (0.1%)
+    TRADE DISCHARGES - SITE DRAINAGE (CONTAM SURFACE WATER, NOT WASTE SIT: 1,015 (0.1%)
+    SEWAGE DISCHARGES - SEWER STORM OVERFLOW - WATER COMPANY: 899 (0.0%)
+    GROUNDWATER - LANDFILL SITE: 809 (0.0%)
+    WASTE SITE - UNSPECIFIED: 722 (0.0%)
+    TRADE DISCHARGES - COOLING WATER: 606 (0.0%)
+    UNSPECIFIED: 543 (0.0%)
+    TRADE DISCHARGES - ABANDONED: 535 (0.0%)
+    SALINE WATER - ESTUARY - CLASS C: 525 (0.0%)
+    MISCELLANEOUS DISCHARGES - UNSPECIFIED: 510 (0.0%)
+    GROUNDWATER - PIT: 480 (0.0%)
+    SALINE WATER - ESTUARY - CLASS B: 360 (0.0%)
+    SALINE WATER - ESTUARY - CLASS A: 358 (0.0%)
+    AGRICULTURE - FISH FARMING - WATER COMPANY: 286 (0.0%)
+    POLLUTION/INVESTIGATION POINTS - DISCHARGES: 239 (0.0%)
+    TRADE DISCHARGES - UNSPECIFIED: 188 (0.0%)
+    SALINE WATER - ESTUARINE SITES - CORRECTED: 143 (0.0%)
+    POLLUTION/INVESTIGATION POINTS - WITHIN PROCESS: 139 (0.0%)
+    SEWAGE DISCHARGES - UNSPECIFIED - WATER COMPANY: 91 (0.0%)
+    MISCELLANEOUS DISCHARGES - MINE/GROUNDWATER AS RAISED: 55 (0.0%)
+    SEWAGE DISCHARGES - PUMPING STATION - WATER COMPANY: 55 (0.0%)
+    SEWAGE DISCHARGES - UNSPECIFIED - NOT WATER COMPANY: 54 (0.0%)
+    TRADE DISCHARGES - TRADE EFFLUENT IN AN EMERGENCY - WATER COMPANY: 38 (0.0%)
+    FRESHWATER - LAND DRAINS: 28 (0.0%)
+    AGRICULTURE - SITE DRAINAGE: 25 (0.0%)
+    SALINE WATER - COMPARATIVE INLET POINT: 19 (0.0%)
+    SEWAGE DISCHARGES - PUMPING STATION - NOT WATER COMPANY: 12 (0.0%)
+    MISCELLANEOUS DISCHARGES - EMERGENCY DISCHARGES: 5 (0.0%)
+    AGRICULTURE - UNSPECIFIED: 3 (0.0%)
+    MISCELLANEOUS DISCHARGES - SWIMMING POOL WATER: 2 (0.0%)
+    SEWERAGE SYSTEM DISCHARGE: 2 (0.0%)
+    WASTE SITE - TREATED EFFLUENT: 2 (0.0%)
+
+[7] Sample material types:
+    RIVER / RUNNING SURFACE WATER: 1,040,788 (57.6%)
+    FINAL SEWAGE EFFLUENT: 180,212 (10.0%)
+    SEA WATER: 144,868 (8.0%)
+    GROUNDWATER: 140,374 (7.8%)
+    POND / LAKE / RESERVOIR WATER: 119,298 (6.6%)
+    ESTUARINE WATER: 57,395 (3.2%)
+    CRUDE SEWAGE: 26,040 (1.4%)
+    GROUNDWATER - PURGED/PUMPED/REFILLED: 24,803 (1.4%)
+    ANY TRADE EFFLUENT: 17,803 (1.0%)
+    MINEWATER: 11,464 (0.6%)
+    COASTAL / MARINE SEDIMENT: 8,108 (0.4%)
+    ESTUARY SEDIMENT: 5,895 (0.3%)
+    SURFACE DRAINAGE: 5,056 (0.3%)
+    STORM TANK INFLUENT: 4,524 (0.3%)
+    TRADE EFFLUENT - FRESHWATER RETURNED ABSTRACTED: 4,032 (0.2%)
+    CANAL WATER: 3,058 (0.2%)
+    GROUNDWATER - STATIC/UNPURGED: 2,341 (0.1%)
+    MINEWATER (FLOWING/PUMPED): 2,331 (0.1%)
+    ANY SEWAGE: 2,105 (0.1%)
+    ANY SOLID/SEDIMENT - UNSPECIFIED: 1,536 (0.1%)
+    ANY WATER: 1,433 (0.1%)
+    COASTAL / MARINE SEDIMENT - > 500UM FRACTION: 1,081 (0.1%)
+    WASTE - BULK MATERIAL: 1,062 (0.1%)
+    STORM SEWER OVERFLOW DISCHARGE: 720 (0.0%)
+    CANAL WATER - SALINE: 489 (0.0%)
+    ANY LEACHATE: 470 (0.0%)
+    ESTUARINE WATER AT HIGH TIDE: 232 (0.0%)
+    TRADE EFFLUENT - SALINE WATER RETURNED ABSTRACTED: 223 (0.0%)
+    PRECIPITATION: 202 (0.0%)
+    SOIL: 115 (0.0%)
+    POTABLE WATER: 76 (0.0%)
+    RUNNING SURFACE WATER SEDIMENT: 75 (0.0%)
+    MYTILUS EDULIS - MUSSEL - MUSCLE: 36 (0.0%)
+    LANDFILL WASTE: 23 (0.0%)
+    TRADE EFFLUENT - GROUNDWATER RETURNED ABSTRACTED: 12 (0.0%)
+    BOREHOLE GAS: 12 (0.0%)
+    CALIBRATION WATER: 5 (0.0%)
+    ANY NON-AQUEOUS LIQUID: 4 (0.0%)
+
+[8] Sampling purposes:
+    MONITORING  (NATIONAL AGENCY POLICY): 583,588 (32.3%)
+    ENVIRONMENTAL MONITORING STATUTORY (EU DIRECTIVES): 559,188 (30.9%)
+    MONITORING  (UK GOVT POLICY - NOT GQA OR RE): 221,185 (12.2%)
+    PLANNED INVESTIGATION (LOCAL MONITORING): 136,286 (7.5%)
+    WATER QUALITY OPERATOR SELF MONITORING COMPLIANCE DATA: 129,700 (7.2%)
+    WATER QUALITY UWWTD MONITORING DATA: 61,822 (3.4%)
+    COMPLIANCE AUDIT (PERMIT): 33,975 (1.9%)
+    UNPLANNED REACTIVE MONITORING (POLLUTION INCIDENTS): 23,444 (1.3%)
+    UNPLANNED REACTIVE MONITORING FORMAL (POLLUTION INCIDENTS): 23,087 (1.3%)
+    STATUTORY FAILURES (FOLLOW UPS AT NON-DESIGNATED POINTS): 11,342 (0.6%)
+    FLOW PASSED FORWARD MONITORING: 5,085 (0.3%)
+    PLANNED INVESTIGATION (NATIONAL AGENCY POLICY): 4,276 (0.2%)
+    MONITORING (BATHING WATER) SHORT TERM POLLUTION END: 2,909 (0.2%)
+    OTA COMPLIANCE CATCHMENT PERMITTING (OPERATOR DATA): 2,822 (0.2%)
+    WASTE MONITORING (AGENCY INVESTIGATION): 2,224 (0.1%)
+    MONITORING (BATHING WATER) SHORT TERM POLLUTION DISREGARDED: 1,693 (0.1%)
+    OPERATING TECHNIQUES AGREEMENT (OPERATOR DATA): 1,686 (0.1%)
+    WASTE MONITORING (FORMAL SAMPLE): 1,584 (0.1%)
+    STATUTORY FAILURES (FOLLOW UPS AT DESIGNATED POINTS): 842 (0.0%)
+    IPPC/IPC MONITORING (AGENCY INVESTIGATION): 747 (0.0%)
+    MONITORING (BATHING WATER) ABNORMAL SITUATION ADDITIONAL: 298 (0.0%)
+    COMPLIANCE FORMAL (PERMIT): 281 (0.0%)
+    MONITORING (BATHING WATER) ABNORMAL SITUATION DISREGARDED: 98 (0.0%)
+    PLANNED FORMAL NON-STATUTORY (PERMIT/ENV MON): 90 (0.0%)
+    IPPC/IPC MONITORING (FORMAL SAMPLE): 45 (0.0%)
+    UNSPECIFIED AT TIME OF WIMS LOAD: 4 (0.0%)
+
+[9] Top 30 determinands (parameters measured):
+    BOD : 5 Day ATU: 79,749
+    Ammoniacal Nitrogen as N: 78,803
+    Temperature of Water: 75,952
+    Solids, Suspended at 105 C: 60,359
+    pH: 58,362
+    Oxygen, Dissolved, % Saturation: 56,328
+    Orthophosphate, reactive as P: 51,661
+    Nitrogen, Total Oxidised as N: 51,266
+    Nitrite as N: 50,097
+    Oxygen, Dissolved as O2: 50,032
+    Nitrate as N: 47,899
+    Conductivity at 25 C: 46,243
+    Phosphorus, Total as P: 43,732
+    Alkalinity to pH 4.5 as CaCO3: 40,862
+    Ammonia un-ionised as N: 37,532
+    Chemical Oxygen Demand :- {COD}: 25,503
+    Nitrogen, Total as N: 17,669
+    Chloride: 15,958
+    Iron: 15,690
+    Escherichia coli : Confirmed : MF: 15,559
+    Enterococci: Intestinal: Presumptive: MF: 14,840
+    Salinity : In Situ: 14,792
+    Carbon, Organic, Dissolved as C :- {DOC}: 14,238
+    Volume of Sample Filtered: 13,213
+    Enterococci: Intestinal: Confirmed: MF: 12,242
+    MST Filtration: 10,774
+    Phosphate :- {TIP}: 9,922
+    Nitrogen, Kjeldahl as N: 9,585
+    Silica, reactive as SiO2: 9,221
+    Nitrogen, Organic as N: 8,892
+
+    Total unique determinands: 996
+
+[10] Measurement units:
+    MILLIGRAM PER LITRE: 794,188
+    MICROGRAM PER LITRE: 520,714
+    CELSIUS: 75,952
+    PERCENTAGE: 68,588
+    PH UNITS: 59,636
+    MICROSIEMENS PER CENTIMETRE: 46,322
+    GARBER Survey Assessment Scale Code: 40,480
+    Coded Result: 28,547
+    Colony Forming Units / 100ml: 27,082
+    NUMBER: 21,499
+    NUMBER PER HUNDRED MILLILITRES: 15,745
+    PRESENT/NOT FOUND: 15,705
+    Parts per thousand: 14,837
+    MILLILITRE: 13,213
+    UNITLESS VALUE: 11,466
+    METRE: 7,930
+    NATIONAL GRID REFERENCE (METRIC): 7,752
+    HOUR (HH.MM): 7,282
+    Text Result: 5,604
+    NEPHELOMETRIC TURBIDITY UNITS: 3,682
+    FORMAZIN TURBIDITY UNIT: 3,473
+    MICROGRAM PER KILOGRAM: 2,601
+    log (10) Gene Copies / 100ml: 2,452
+    MILLIGRAM PER KILOGRAM: 2,233
+    COLOUR: 1,731
+    LITRE PER SECOND: 1,568
+    Number per year: 1,513
+    CUBIC METRE PER DAY: 1,340
+    PRESENT/NOT FOUND IN TEST: 1,166
+    MILLIMETRE: 944
+    Hours (Decimal): 639
+    NUMBER PER MILLILITRE: 619
+    ABSORPTION PER CENTIMETRE: 438
+    YES(1) OR NO(0): 309
+    TONNE/DAY: 248
+    DEGREE: 199
+    MEGALITRE: 167
+    Quinine Sulphate Units: 154
+    MILLIVOLT: 100
+    GRAM: 45
+    Mole Per Kilogram: 41
+    CUBIC METRE PER HOUR: 39
+    PFU/ml: 23
+    NUMBER PER GRAM: 16
+    KILOGRAM PER DAY: 10
+    Milliwatt seconds per square centimetre: 5
+    Millisiemens per centimetre: 3
+    GRAM PER KILOGRAM: 1
+
+[11] Unique sampling points: 16,799
+     Unique sampling point names: 16,796
+
+[12] Sampling point statuses:
+    OPEN: 1,807,633
+    CLOSED: 668
+
+[13] Numeric result analysis:
+    Numeric results: 1,197,626 (66.2%)
+    Below detection limit ('<'): 521,831 (28.9%)
+    Text/coded results: 88,844 (4.9%)
+
+[14] Monthly distribution of observations:
+    2025-04: 146,925
+    2025-05: 185,962
+    2025-06: 183,106
+    2025-07: 204,981
+    2025-08: 189,636
+    2025-09: 192,298
+    2025-10: 195,382
+    2025-11: 187,294
+    2025-12: 142,290
+    2026-01: 114,983
+    2026-02: 65,444
+
+[15] Geographic extent:
+    Longitude range: -5.7041 to 1.7874
+    Latitude range:  49.8919 to 55.8153
+
+[16] PFAS (Forever chemicals) observations:
+    Total PFAS-related observations: 60,519
+    Unique PFAS determinands: 60
+      Perfluorooctylsulphonate anion: 1,818
+      Perfluorooctanoate anion: 1,768
+      Perfluorohexanoic acid: 1,226
+      Perfluorodecanoic acid: 1,225
+      Perfluoropentanoic acid: 1,223
+      Perfluorooctanoic acid: 1,220
+      Perfluoroundecanoic acid: 1,218
+      Perfluorododecanoic acid: 1,204
+      Perfluoro-3-methoxypropanoic acid: 1,200
+      Perfluoro-3,6-dioxaheptanoic acid: 1,200
+
+[17] Key water quality parameter statistics (numeric values only):
+
+    pH [PH UNITS]:
+      Count: 58,338
+      Mean:  7.746
+      Std:   0.533
+      Min:   2.890
+      25%:   7.510
+      50%:   7.810
+      75%:   8.050
+      Max:   14.000
+
+    Temperature of Water [CELSIUS]:
+      Count: 75,952
+      Mean:  12.901
+      Std:   4.520
+      Min:   0.000
+      25%:   9.600
+      50%:   13.000
+      75%:   16.200
+      Max:   46.600
+
+    BOD : 5 Day ATU [MILLIGRAM PER LITRE]:
+      Count: 59,628
+      Mean:  45.744
+      Std:   193.107
+      Min:   0.000
+      25%:   2.000
+      50%:   4.320
+      75%:   12.000
+      Max:   22000.000
+
+    Ammoniacal Nitrogen as N [MILLIGRAM PER LITRE]:
+      Count: 41,640
+      Mean:  2.159
+      Std:   14.334
+      Min:   0.000
+      25%:   0.052
+      50%:   0.166
+      75%:   1.100
+      Max:   1300.000
+
+    Oxygen, Dissolved, % Saturation [PERCENTAGE]:
+      Count: 56,328
+      Mean:  90.041
+      Std:   18.946
+      Min:   0.000
+      25%:   85.000
+      50%:   94.200
+      75%:   99.300
+      Max:   447.000
+
+    Oxygen, Dissolved as O2 [MILLIGRAM PER LITRE]:
+      Count: 50,031
+      Mean:  9.722
+      Std:   2.233
+      Min:   0.010
+      25%:   8.630
+      50%:   9.990
+      75%:   11.100
+      Max:   108.900
+
+    Nitrate as N [MILLIGRAM PER LITRE]:
+      Count: 46,035
+      Mean:  5.270
+      Std:   10.079
+      Min:   0.000
+      25%:   1.200
+      50%:   3.500
+      75%:   7.400
+      Max:   1176.988
+
+    Orthophosphate, reactive as P [MILLIGRAM PER LITRE]:
+      Count: 45,469
+      Mean:  0.284
+      Std:   1.759
+      Min:   0.001
+      25%:   0.030
+      50%:   0.068
+      75%:   0.160
+      Max:   190.000
+
+    Conductivity at 25 C [MICROSIEMENS PER CENTIMETRE]:
+      Count: 46,243
+      Mean:  850.615
+      Std:   2901.698
+      Min:   0.000
+      25%:   324.000
+      50%:   576.000
+      75%:   777.000
+      Max:   58518.000
+
+======================================================================
+ANALYSIS COMPLETE
+======================================================================
