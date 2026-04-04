@@ -21,6 +21,10 @@ The ingestion layer simulates real-time data flow by streaming row-level observa
 
 1. **Start Infrastructure**:
    ```bash
+   cp .env.example .env
+
+   # Edit .env file to change the default values if needed
+
    docker compose up -d
    ```
 
@@ -38,6 +42,19 @@ The ingestion layer simulates real-time data flow by streaming row-level observa
 
 4. **Monitor Feed**:
    Check the [Kafka UI](http://localhost:8080) to verify messages are flowing into the `water-quality-raw` topic.
+
+5. **Access pgAdmin**:
+   Check the [pgAdmin](http://localhost:5050) to verify the database.
+   
+   PgAdmin login:
+      Email: admin@example.com
+      Password: admin_secret_password
+   
+   Host name/address: db
+   Port: 5432
+   Maintenance database: app_database
+   Username: admin
+   Password: your_secure_password
 
 
 ## Next Steps
