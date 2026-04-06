@@ -1,397 +1,175 @@
-"""
-WQI Consumer — Water Quality Index Calculator (PySpark Version)
-
-Consumes water quality observations from the 'water-quality-raw' Kafka topic
-using PySpark Structured Streaming, calculates a Weighted Arithmetic Water Quality 
-Index (WQI) per sampling point, and periodically flushes results to PostgreSQL.
-"""
-from dotenv import load_dotenv
-
-load_dotenv()
-
 import os
-import sys
-import time
-
-os.environ['PYSPARK_PYTHON'] = sys.executable
-os.environ['PYSPARK_DRIVER_PYTHON'] = sys.executable
-
 import psycopg2
 from psycopg2.extras import execute_values
-
 from pyspark.sql import SparkSession
-import pyspark.sql.functions as F
-from pyspark.sql.types import *
+from pyspark.sql.functions import (
+    col, from_json, to_timestamp, window, when, avg, expr
+)
+from pyspark.sql.types import StructType, StructField, StringType
+from dotenv import load_dotenv
+load_dotenv()
 
-# =============================================================================
-# CONFIGURATION
-# =============================================================================
+# --- Configuration ---
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+KAFKA_TOPIC = "water-quality-raw"
+PG_HOST = os.getenv("PG_HOST", "localhost")
+PG_PORT = os.getenv("PG_PORT", "5432")
+POSTGRES_DB = os.getenv("POSTGRES_DB", "app_database")
+POSTGRES_USER = os.getenv("POSTGRES_USER", "admin")
+POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "your_secure_password")
+WQI_FLUSH_INTERVAL = os.getenv("WQI_FLUSH_INTERVAL", "10 minutes")
 
-BOOTSTRAP_SERVERS = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')
-TOPIC_NAME = 'water-quality-raw'
-
-# PostgreSQL connection
-DB_HOST = os.getenv('POSTGRES_HOST', 'localhost')
-DB_PORT = int(os.getenv('POSTGRES_PORT', '5432'))
-DB_NAME = os.getenv('POSTGRES_DB', 'app_database')
-DB_USER = os.getenv('POSTGRES_USER', 'admin')
-DB_PASSWORD = os.getenv('POSTGRES_PASSWORD', 'your_secure_password')
-
-# WQI Configuration
-FLUSH_INTERVAL_ENV = os.getenv('WQI_FLUSH_INTERVAL', '60') 
-if FLUSH_INTERVAL_ENV.isdigit():
-    FLUSH_INTERVAL = f"{FLUSH_INTERVAL_ENV} seconds"
-else:
-    FLUSH_INTERVAL = FLUSH_INTERVAL_ENV
-
-MIN_PARAMS = int(os.getenv('WQI_MIN_PARAMS', '3'))  # minimum parameters to calculate WQI
-
-# =============================================================================
-# WQI PARAMETER DEFINITIONS
-# =============================================================================
-
-DETERMINAND_MAP = {
-    'pH': 'ph',
-    'Oxygen, Dissolved, % Saturation': 'dissolved_oxygen_pct',
-    'BOD : 5 Day ATU': 'bod',
-    'Ammoniacal Nitrogen as N': 'ammoniacal_nitrogen',
-    'Nitrate as N': 'nitrate',
-    'Orthophosphate, reactive as P': 'orthophosphate',
-    'Temperature of Water': 'temperature',
-}
-
-WQI_PARAMS = {
-    'ph': {'weight': 4, 'ideal': 7.0, 'standard': 8.5, 'type': 'proximity'},
-    'dissolved_oxygen_pct': {'weight': 4, 'ideal': 100.0, 'standard': 80.0, 'type': 'proximity'},
-    'bod': {'weight': 3, 'ideal': 0.0, 'standard': 6.0, 'type': 'pollutant'},
-    'ammoniacal_nitrogen': {'weight': 3, 'ideal': 0.0, 'standard': 1.5, 'type': 'pollutant'},
-    'nitrate': {'weight': 2, 'ideal': 0.0, 'standard': 10.0, 'type': 'pollutant'},
-    'orthophosphate': {'weight': 1, 'ideal': 0.0, 'standard': 0.1, 'type': 'pollutant'},
-    'temperature': {'weight': 1, 'ideal': 15.0, 'standard': 30.0, 'type': 'proximity'},
-}
-
-WQI_CATEGORIES = [
-    (91, 'Excellent'),
-    (71, 'Good'),
-    (51, 'Moderate'),
-    (26, 'Bad'),
-    (0, 'Very Bad'),
-]
-
-# =============================================================================
-# DATABASE SETUP
-# =============================================================================
-
-CREATE_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS wqi_scores (
-    id SERIAL PRIMARY KEY,
-    sampling_point_notation VARCHAR(50) NOT NULL,
-    sampling_point_label VARCHAR(255),
-    region VARCHAR(100),
-    area VARCHAR(255),
-    latitude DOUBLE PRECISION,
-    longitude DOUBLE PRECISION,
-    wqi_score DOUBLE PRECISION NOT NULL,
-    wqi_category VARCHAR(20) NOT NULL,
-    parameters_used INTEGER NOT NULL,
-    ph DOUBLE PRECISION,
-    dissolved_oxygen_pct DOUBLE PRECISION,
-    bod DOUBLE PRECISION,
-    ammoniacal_nitrogen DOUBLE PRECISION,
-    nitrate DOUBLE PRECISION,
-    orthophosphate DOUBLE PRECISION,
-    temperature DOUBLE PRECISION,
-    sample_time TIMESTAMP,
-    calculated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE(sampling_point_notation, sample_time)
-);
-"""
-
-CREATE_INDEXES_SQL = [
-    "CREATE INDEX IF NOT EXISTS idx_wqi_notation ON wqi_scores(sampling_point_notation);",
-    "CREATE INDEX IF NOT EXISTS idx_wqi_category ON wqi_scores(wqi_category);",
-    "CREATE INDEX IF NOT EXISTS idx_wqi_region ON wqi_scores(region);",
-]
-
-UPSERT_SQL = """
-INSERT INTO wqi_scores (
-    sampling_point_notation, sampling_point_label, region, area,
-    latitude, longitude, wqi_score, wqi_category, parameters_used,
-    ph, dissolved_oxygen_pct, bod, ammoniacal_nitrogen,
-    nitrate, orthophosphate, temperature, sample_time
-) VALUES %s
-ON CONFLICT (sampling_point_notation, sample_time)
-DO UPDATE SET
-    wqi_score = EXCLUDED.wqi_score,
-    wqi_category = EXCLUDED.wqi_category,
-    parameters_used = EXCLUDED.parameters_used,
-    ph = EXCLUDED.ph,
-    dissolved_oxygen_pct = EXCLUDED.dissolved_oxygen_pct,
-    bod = EXCLUDED.bod,
-    ammoniacal_nitrogen = EXCLUDED.ammoniacal_nitrogen,
-    nitrate = EXCLUDED.nitrate,
-    orthophosphate = EXCLUDED.orthophosphate,
-    temperature = EXCLUDED.temperature,
-    calculated_at = CURRENT_TIMESTAMP;
-"""
-
-def connect_db():
-    """Connect to PostgreSQL with retry logic."""
-    while True:
-        try:
-            conn = psycopg2.connect(
-                host=DB_HOST,
-                port=DB_PORT,
-                dbname=DB_NAME,
-                user=DB_USER,
-                password=DB_PASSWORD,
-            )
-            conn.autocommit = False
-            return conn
-        except psycopg2.OperationalError as e:
-            print(f"[DB] Connection failed: {e}. Retrying in 5 seconds...")
-            time.sleep(5)
-
-def init_db():
-    """Create tables and indexes if they don't exist."""
-    print(f"[DB] Connecting to PostgreSQL at {DB_HOST}:{DB_PORT}/{DB_NAME} to initialize tables...")
-    conn = connect_db()
-    with conn.cursor() as cur:
-        cur.execute(CREATE_TABLE_SQL)
-        for idx_sql in CREATE_INDEXES_SQL:
-            cur.execute(idx_sql)
-    conn.commit()
-    conn.close()
-    print("[DB] Tables and indexes initialized.")
-
-
-# =============================================================================
-# WQI CALCULATION (Exact Python Logic)
-# =============================================================================
-
-def calculate_sub_index(param_key, value):
-    config = WQI_PARAMS[param_key]
-    ideal = config['ideal']
-    standard = config['standard']
-
-    if param_key == 'ph':
-        if 6.5 <= value <= 8.5: return 100.0
-        elif value < 6.5: return max(0.0, 100.0 * (1.0 - (6.5 - value) / 2.5))
-        else: return max(0.0, 100.0 * (1.0 - (value - 8.5) / 2.5))
-
-    if param_key == 'dissolved_oxygen_pct':
-        if value >= 100.0: return 100.0
-        return max(0.0, min(100.0, value))
-
-    if param_key == 'temperature':
-        if 10.0 <= value <= 20.0: return 100.0
-        elif value < 10.0: return max(0.0, 100.0 * (1.0 - (10.0 - value) / 10.0))
-        else: return max(0.0, 100.0 * (1.0 - (value - 20.0) / 15.0))
-
-    denominator = abs(standard - ideal)
-    if denominator == 0: return 100.0
-    deviation = abs(value - ideal) / denominator
-    return max(0.0, min(100.0, 100.0 * (1.0 - deviation)))
-
-
-def calculate_wqi(params):
-    if len(params) < MIN_PARAMS: return None
-
-    weighted_sum = 0.0
-    weight_total = 0.0
-    for key, value in params.items():
-        if key not in WQI_PARAMS: continue
-        qi = calculate_sub_index(key, value)
-        wi = WQI_PARAMS[key]['weight']
-        weighted_sum += qi * wi
-        weight_total += wi
-
-    if weight_total == 0: return None
-    wqi_score = weighted_sum / weight_total
-
-    category = 'Very Bad'
-    for threshold, label in WQI_CATEGORIES:
-        if wqi_score >= threshold:
-            category = label
-            break
-
-    return wqi_score, category, len(params)
-
-
-# Spark UDF wrappers
-@F.udf(returnType=FloatType())
-def parse_numeric_udf(val):
-    if not val: return None
-    val = str(val).strip()
-    if val.startswith('<'):
-        try: return float(val[1:]) / 2.0
-        except: return None
-    try: return float(val)
-    except: return None
-
-@F.udf(returnType=StringType())
-def map_param_key_udf(det):
-    return DETERMINAND_MAP.get(det)
-
-
-
-# =============================================================================
-# WRITING TO POSTGRES
-# =============================================================================
-
-
-
-def process_batch(batch_df, batch_id):
-    # Collect batch to driver to avoid Python Worker Daemon State-Store crashes on Windows
-    rows = batch_df.collect()
-    out_rows = []
-    
-    for row in rows:
-        row_dict = row.asDict()
-        
-        params = {
-            k: row_dict.get(k) 
-            for k in WQI_PARAMS.keys() 
-            if row_dict.get(k) is not None
-        }
-        
-        res = calculate_wqi(params)
-        if not res: continue
-        
-        score, category, count = res
-        
-        out_rows.append((
-            row_dict['notation'],
-            row_dict['label'],
-            row_dict['region'],
-            row_dict['area'],
-            row_dict['latitude'],
-            row_dict['longitude'],
-            round(score, 2),
-            category,
-            count,
-            row_dict.get('ph'), 
-            row_dict.get('dissolved_oxygen_pct'), 
-            row_dict.get('bod'), 
-            row_dict.get('ammoniacal_nitrogen'), 
-            row_dict.get('nitrate'), 
-            row_dict.get('orthophosphate'), 
-            row_dict.get('temperature'),
-            row_dict['sample_time']
-        ))
-        
-    if not out_rows:
-        return
-        
-    conn = connect_db()
-    try:
-        with conn.cursor() as cur:
-            execute_values(cur, UPSERT_SQL, out_rows)
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        print(f"[DB] Error upserting {len(out_rows)} rows: {e}")
-    finally:
-        conn.close()
-
-# =============================================================================
-# MAIN LOOP
-# =============================================================================
-
-def run():
-    print("=" * 70)
-    print("WQI CONSUMER — PySpark Structured Streaming")
-    print("=" * 70)
-    print(f"  Kafka:          {BOOTSTRAP_SERVERS}")
-    print(f"  Topic:          {TOPIC_NAME}")
-    print(f"  PostgreSQL:     {DB_HOST}:{DB_PORT}/{DB_NAME}")
-    print(f"  Flush Interval: {FLUSH_INTERVAL}")
-    print(f"  Min Parameters: {MIN_PARAMS}")
-    print("=" * 70)
-
-    # Initialize PostgreSQL Tables
-    init_db()
-
-    import pyspark
-    spark_version = pyspark.__version__
-    scala_version = "2.13" if int(spark_version.split('.')[0]) >= 4 else "2.12"
-    kafka_pkg = f"org.apache.spark:spark-sql-kafka-0-10_{scala_version}:{spark_version}"
-
-    # Need the spark-sql-kafka driver so we include it as package
-    spark = SparkSession.builder \
-        .appName("WQIConsumerSpark") \
-        .config("spark.jars.packages", kafka_pkg) \
-        .config("spark.python.worker.faulthandler.enabled", "true") \
-        .config("spark.sql.execution.pyspark.udf.faulthandler.enabled", "true") \
+def get_spark_session():
+    return SparkSession.builder \
+        .appName("WaterQualityIndexCalculator") \
+        .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.13:4.1.1") \
         .getOrCreate()
-        
+
+def process_batch(df, epoch_id):
+    """
+    Executes an upsert operation into PostgreSQL for each micro-batch.
+    """
+    # 1. Flatten the nested 'window' struct into standard columns to avoid conversion crashes
+    flat_df = df.select(
+        col("samplingPoint_notation"),
+        col("window.start").alias("window_start"),
+        col("window.end").alias("window_end"),
+        col("avg_bod"),
+        col("avg_cod"),
+        col("avg_phosphorus"),
+        col("wqi_score")
+    )
+
+    # 2. Use Spark's native collect() instead of toPandas()
+    # This returns a list of Spark Row objects, which are completely safe to iterate over
+    rows = flat_df.collect()
+    if not rows:
+        return
+
+    # 3. Prepare data tuples for the upsert
+    records = [
+        (
+            row.samplingPoint_notation,
+            row.window_start,
+            row.window_end,
+            row.avg_bod,
+            row.avg_cod,
+            row.avg_phosphorus,
+            row.wqi_score
+        )
+        for row in rows
+    ]
+
+    upsert_query = """
+        INSERT INTO water_quality_index (
+            sampling_point, window_start, window_end, 
+            avg_bod, avg_cod, avg_phosphorus, wqi_score
+        ) VALUES %s
+        ON CONFLICT (sampling_point, window_start) 
+        DO UPDATE SET 
+            window_end = EXCLUDED.window_end,
+            avg_bod = EXCLUDED.avg_bod,
+            avg_cod = EXCLUDED.avg_cod,
+            avg_phosphorus = EXCLUDED.avg_phosphorus,
+            wqi_score = EXCLUDED.wqi_score,
+            updated_at = CURRENT_TIMESTAMP;
+    """
+
+    conn = None
+    try:
+        conn = psycopg2.connect(
+            host=PG_HOST, port=PG_PORT, dbname=POSTGRES_DB, 
+            user=POSTGRES_USER, password=POSTGRES_PASSWORD
+        )
+        cursor = conn.cursor()
+        execute_values(cursor, upsert_query, records)
+        conn.commit()
+        cursor.close()
+    except Exception as e:
+        print(f"Failed to write batch to PostgreSQL: {e}")
+    finally:
+        if conn is not None:
+            conn.close()
+
+def main():
+    spark = get_spark_session()
     spark.sparkContext.setLogLevel("WARN")
 
+    # 1. Define the exact schema from the CSV producer
+    schema = StructType([
+        StructField("id", StringType(), True),
+        StructField("samplingPoint.notation", StringType(), True),
+        StructField("samplingPoint.prefLabel", StringType(), True),
+        StructField("samplingPoint.longitude", StringType(), True),
+        StructField("samplingPoint.latitude", StringType(), True),
+        StructField("samplingPoint.region", StringType(), True),
+        StructField("samplingPoint.area", StringType(), True),
+        StructField("samplingPoint.subArea", StringType(), True),
+        StructField("samplingPoint.samplingPointStatus", StringType(), True),
+        StructField("samplingPoint.samplingPointType", StringType(), True),
+        StructField("phenomenonTime", StringType(), True),
+        StructField("samplingPurpose", StringType(), True),
+        StructField("sampleMaterialType", StringType(), True),
+        StructField("determinand.notation", StringType(), True),
+        StructField("determinand.prefLabel", StringType(), True),
+        StructField("result", StringType(), True),
+        StructField("unit", StringType(), True)
+    ])
+
+    # 2. Read Stream from Kafka
     raw_stream = spark.readStream \
         .format("kafka") \
-        .option("kafka.bootstrap.servers", BOOTSTRAP_SERVERS) \
-        .option("subscribe", TOPIC_NAME) \
-        .option("startingOffsets", "earliest") \
-        .option("failOnDataLoss", "false") \
+        .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP_SERVERS) \
+        .option("subscribe", KAFKA_TOPIC) \
+        .option("startingOffsets", "latest") \
         .load()
-        
-    parsed_stream = raw_stream.withColumn("json_str", F.col("value").cast("string")) \
-        .withColumn("json", F.expr("from_json(json_str, 'map<string,string>')")) \
-        .selectExpr(
-            "json['determinand.prefLabel'] as determinand",
-            "json['result'] as result",
-            "json['samplingPoint.notation'] as notation",
-            "json['samplingPoint.prefLabel'] as prefLabel",
-            "json['samplingPoint.region'] as region",
-            "json['samplingPoint.area'] as area",
-            "json['samplingPoint.latitude'] as latitude",
-            "json['samplingPoint.longitude'] as longitude",
-            "json['phenomenonTime'] as sample_time_str"
-        )
 
-    valid_determinands = list(DETERMINAND_MAP.keys())
-    
-    clean_stream = parsed_stream \
-        .filter(F.col("determinand").isin(valid_determinands)) \
-        .withColumn("param_key", map_param_key_udf("determinand")) \
-        .withColumn("numeric_value", parse_numeric_udf("result")) \
-        .withColumn("latitude_val", parse_numeric_udf("latitude")) \
-        .withColumn("longitude_val", parse_numeric_udf("longitude")) \
-        .withColumn("sample_time_ts", F.to_timestamp("sample_time_str")) \
-        .withColumn("sample_time", F.col("sample_time_str")) \
-        .filter(F.col("numeric_value").isNotNull() & F.col("notation").isNotNull() & F.col("sample_time_ts").isNotNull())
+    # 3. Parse JSON and clean column names (replacing dots with underscores for Spark SQL safety)
+    parsed_stream = raw_stream.select(from_json(col("value").cast("string"), schema).alias("data")).select("data.*")
+    cleaned_columns = [col(f"`{c}`").alias(c.replace(".", "_")) for c in parsed_stream.columns]
+    df = parsed_stream.select(*cleaned_columns)
 
-    agg_exprs = [
-        F.last("prefLabel", ignorenulls=True).alias("label"),
-        F.last("region", ignorenulls=True).alias("region"),
-        F.last("area", ignorenulls=True).alias("area"),
-        F.last("latitude_val", ignorenulls=True).alias("latitude"),
-        F.last("longitude_val", ignorenulls=True).alias("longitude"),
-        F.max("sample_time").alias("sample_time")
-    ]
-    
-    for param in WQI_PARAMS.keys():
-        agg_exprs.append(
-            F.last(F.when(F.col("param_key") == param, F.col("numeric_value")), ignorenulls=True).alias(param)
-        )
-        
-    # Apply watermark and time window grouping fully natively
-    windowed_agg = clean_stream \
-        .withWatermark("sample_time_ts", "3 hours") \
+    # 4. Clean Numeric Data and Cast Timestamps
+    # Extract numbers and use TRY_CAST to safely return null for empty or invalid strings
+    df = df.withColumn("numeric_result", expr("TRY_CAST(regexp_replace(result, '[^0-9.]', '') AS DOUBLE)"))
+    df = df.withColumn("timestamp", to_timestamp(col("phenomenonTime"), "yyyy-MM-dd HH:mm:ss"))
+
+    # 5. Apply Watermarking and 3-Hour Time Window
+    # The watermark ensures we keep state for late data up to 3 hours past the max observed event time
+    windowed_df = df \
+        .withWatermark("timestamp", "3 hours") \
         .groupBy(
-            F.window("sample_time_ts", "3 hours"),
-            "notation"
+            col("samplingPoint_notation"),
+            window(col("timestamp"), "3 hours")
         ) \
-        .agg(*agg_exprs)
+        .agg(
+            avg(when(col("determinand_prefLabel") == "BOD : 5 Day ATU", col("numeric_result"))).alias("avg_bod"),
+            avg(when(col("determinand_prefLabel") == "Chemical Oxygen Demand :- {COD}", col("numeric_result"))).alias("avg_cod"),
+            avg(when(col("determinand_prefLabel") == "Phosphorus, Total as P", col("numeric_result"))).alias("avg_phosphorus")
+        )
 
-    query = windowed_agg.writeStream \
+    # 6. Calculate a Generalized Water Quality Index (WQI)
+    # Note: Replace this formula with your specific regulatory calculation
+    # This sample uses a 100-point scale, deducting points for high contamination levels
+    scored_df = windowed_df.withColumn(
+        "wqi_score",
+        expr("""
+            GREATEST(0, LEAST(100, 
+                100 - (COALESCE(avg_bod, 0) * 0.5) 
+                    - (COALESCE(avg_cod, 0) * 0.1) 
+                    - (COALESCE(avg_phosphorus, 0) * 5)
+            ))
+        """)
+    )
+
+    # 7. Write Stream via ForeachBatch
+    query = scored_df.writeStream \
         .outputMode("update") \
-        .trigger(processingTime=FLUSH_INTERVAL) \
         .foreachBatch(process_batch) \
+        .trigger(processingTime=WQI_FLUSH_INTERVAL) \
         .start()
 
-    print("[Main] Streaming job started! Press Ctrl+C to shut down.")
     query.awaitTermination()
 
 if __name__ == "__main__":
-    run()
+    main()
