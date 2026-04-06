@@ -1,116 +1,69 @@
-# UK Water Quality Intelligence Platform
+# Water Quality Index (WQI) Data Pipeline
 
-A real-time Big Data pipeline for monitoring and analyzing water quality across the UK, using Environment Agency Open Data.
+This project is a big data pipeline that calculates the Water Quality Index (WQI) from raw water quality observations. It streams sensor/observation data via Apache Kafka, processes and enriches it in real-time using PySpark Structured Streaming, and stores the resulting WQI scores into a PostgreSQL database for analysis.
 
-## Phase 1 & 2: Ingestion Layer
+## Architecture
 
-The ingestion layer simulates real-time data flow by streaming row-level observations from a 741MB CSV file into a Kafka topic.
+1. **Data Ingestion (`producer.py`)**: Simulating realtime ingestion by reads raw water quality observation data from a CSV file (`data/observations-2026-4-3-sorted.csv`) and publishes each observation as a JSON message to an Apache Kafka topic (`water-quality-raw`).
+2. **Message Broker (Apache Kafka)**: Handled via Docker Compose. Brokers the real-time messages. Kafka-UI is included for monitoring topics, partitions, and messages.
+3. **Stream Processing (`wqi_consumer.py`)**: A PySpark Structured Streaming application. 
+   - Subscribes to the `water-quality-raw` Kafka topic.
+   - Cleans, parses, and filters raw sensor data.
+   - Aggregates readings by sampling point.
+   - Calculates the Water Quality Index (WQI) based on up to 7 tracked parameters: pH, Dissolved Oxygen, BOD, Ammoniacal Nitrogen, Nitrate, Orthophosphate, and Temperature.
+4. **Data Storage (PostgreSQL)**: The processed WQI scores and localized categories (e.g., Excellent, Good, Bad) are upserted into a PostgreSQL database (`wqi_scores` table). PgAdmin is deployed alongside the database for UI-based querying and administration.
 
-### Infrastructure
-- **Apache Kafka**: Message broker for the raw data stream.
-- **Kafka UI**: Monitoring interface available at http://localhost:8080.
-- **PostgreSQL**: Stores computed Water Quality Index (WQI) scores.
-- **pgAdmin**: Database management UI at http://localhost:5050.
-- **Docker Compose**: Orchestrates all services.
+## Prerequisites
 
-### Components
-- `producer.py`: Streams `observations-2026-4-3-sorted.csv` to the `water-quality-raw` Kafka topic.
-  - Efficiently uses `csv.DictReader` for low memory footprint.
-  - Simulates real-time ingestion with a configurable delay (default ~100 rows/sec).
-  - Handles 1.8M rows of historical data.
+- **Docker & Docker Compose**: Needed to run Apache Kafka, PostgreSQL, Kafka-UI, and pgAdmin.
+- **Python >= 3.13**
+- **uv**: Recommended fast package manager for Python dependency management.
 
-## Phase 3: WQI Processing Layer
-
-The WQI consumer calculates a **Weighted Arithmetic Water Quality Index** per sampling point from incoming Kafka messages, then periodically batch-upserts results to PostgreSQL.
-
-### WQI Calculation Method
-
-Uses the **Weighted Arithmetic Index** (NSF-WQI inspired) with 7 parameters:
-
-| Parameter | Weight | Ideal | Standard Limit |
-|---|---|---|---|
-| pH | 4 | 7.0 | 8.5 |
-| Dissolved Oxygen (% sat) | 4 | 100% | 80% min |
-| BOD (5-day ATU) | 3 | 0 mg/L | 6.0 mg/L |
-| Ammoniacal Nitrogen | 3 | 0 mg/L | 1.5 mg/L |
-| Nitrate as N | 2 | 0 mg/L | 10.0 mg/L |
-| Orthophosphate | 1 | 0 mg/L | 0.1 mg/L |
-| Temperature | 1 | 15°C | 30°C |
-
-**WQI Classification:**
-- 91–100: Excellent
-- 71–90: Good
-- 51–70: Moderate
-- 26–50: Bad
-- 0–25: Very Bad
-
-### Components
-- `wqi_consumer.py`: Kafka consumer that:
-  - Filters for WQI-relevant determinands from the raw stream.
-  - Accumulates parameter values per sampling point in memory.
-  - Calculates WQI when ≥ `WQI_MIN_PARAMS` parameters are available.
-  - Batch-upserts to PostgreSQL every `WQI_FLUSH_INTERVAL` seconds.
-  - Auto-creates the `wqi_scores` table on startup.
-
-## How to Run
-
-1. **Start Infrastructure**:
+## Setup Instructions
+1. **Configure Environment**
+   Copy the example environment file and adjust the variables as needed:
    ```bash
    cp .env.example .env
-
-   # Edit .env file to change the default values if needed
-
-   docker compose up -d
    ```
-
-2. **Activate Environment**:
+2. **Install Dependencies**
+   The project uses `uv` for dependency management. Create a virtual environment and synchronize the dependencies:
    ```bash
+   uv venv
    .venv\Scripts\activate
-   ```
+   uv sync
+   ```   
 
-3. **Start Ingestion Simulation**:
+3. **Start the Infrastructure**
+   Run the following command to spin up the required Docker containers:
    ```bash
-   python producer.py
+   docker-compose up -d
    ```
+   This starts:
+   - Kafka on port `9092`
+   - Kafka-UI at `http://localhost:8080`
+   - PostgreSQL on port `5432`
+   - pgAdmin at `http://localhost:5050`
 
-4. **Start WQI Consumer** (in a separate terminal):
-   ```bash
-   .venv\Scripts\activate
-   python wqi_consumer.py
-   ```
 
-5. **Monitor Feed**:
-   Check the [Kafka UI](http://localhost:8080) to verify messages are flowing into the `water-quality-raw` topic.
+## Running the Pipeline
 
-6. **Verify WQI Results**:
-   Open [pgAdmin](http://localhost:5050) and run:
-   ```sql
-   SELECT sampling_point_notation, sampling_point_label, region,
-          wqi_score, wqi_category, parameters_used, sample_time
-   FROM wqi_scores
-   ORDER BY calculated_at DESC
-   LIMIT 20;
-   ```
+Ensure that your local virtual environment is active in any terminal before running the Python scripts (`.venv\Scripts\activate`).
 
-7. **Access pgAdmin**:
-   Check the [pgAdmin](http://localhost:5050) to verify the database.
-   
-   PgAdmin login:
-      Email: admin@example.com
-      Password: admin_secret_password
-   
-   Host name/address: db
-   Port: 5432
-   Maintenance database: app_database
-   Username: admin
-   Password: your_secure_password
+### 1. Start the Stream Processor (Consumer)
+Run the PySpark consumer to listen for incoming messages, calculate the WQI, and write the grouped results to PostgreSQL:
+```bash
+python wqi_consumer.py
+```
+*Note: This process runs continuously. Keep this running in its own terminal.*
 
-## Environment Variables
+### 2. Start the Data Producer
+In a separate terminal (with the `.venv` activated), start the producer script to begin streaming the raw CSV observation data into Kafka:
+```bash
+.venv\Scripts\activate
+python producer.py
+```
 
-| Variable | Default | Description |
-|---|---|---|
-| `POSTGRES_USER` | `admin` | PostgreSQL username |
-| `POSTGRES_PASSWORD` | `your_secure_password` | PostgreSQL password |
-| `POSTGRES_DB` | `app_database` | PostgreSQL database name |
-| `WQI_FLUSH_INTERVAL` | `60` | Seconds between batch writes to PostgreSQL |
-| `WQI_MIN_PARAMS` | `3` | Minimum WQI parameters needed to calculate a score |
+### 3. Verification & Analysis
+Once data is streaming, you can:
+- Verify message production at **Kafka-UI**: `http://localhost:8080`
+- Query the `wqi_scores` output table using **PgAdmin**: `http://localhost:5050`
