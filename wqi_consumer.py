@@ -3,7 +3,7 @@ import psycopg2
 from psycopg2.extras import execute_values
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import (
-    col, from_json, to_timestamp, window, when, avg, expr, abs
+    col, from_json, to_timestamp, window, when, avg, expr, abs, first
 )
 from pyspark.sql.types import StructType, StructField, StringType
 from dotenv import load_dotenv
@@ -49,6 +49,8 @@ def init_db():
                 avg_phosphorus DOUBLE PRECISION,
                 avg_ammonia DOUBLE PRECISION,
                 avg_ph DOUBLE PRECISION,
+                latitude DOUBLE PRECISION,
+                longitude DOUBLE PRECISION,
                 wqi_score DOUBLE PRECISION,
                 wqi_status VARCHAR(50),
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -78,6 +80,8 @@ def process_batch(df, epoch_id):
         col("avg_phosphorus"),
         col("avg_ammonia"),
         col("avg_ph"),
+        col("latitude"),
+        col("longitude"),
         col("wqi_score"),
         col("wqi_status")
     )
@@ -96,6 +100,8 @@ def process_batch(df, epoch_id):
             row.avg_phosphorus,
             row.avg_ammonia,
             row.avg_ph,
+            row.latitude,
+            row.longitude,
             row.wqi_score,
             row.wqi_status
         )
@@ -106,7 +112,7 @@ def process_batch(df, epoch_id):
         INSERT INTO water_quality_index (
             sampling_point, window_start, window_end, 
             avg_bod, avg_cod, avg_phosphorus, 
-            avg_ammonia, avg_ph, wqi_score, wqi_status
+            avg_ammonia, avg_ph, latitude, longitude, wqi_score, wqi_status
         ) VALUES %s
         ON CONFLICT (sampling_point, window_start) 
         DO UPDATE SET 
@@ -116,6 +122,8 @@ def process_batch(df, epoch_id):
             avg_phosphorus = EXCLUDED.avg_phosphorus,
             avg_ammonia = EXCLUDED.avg_ammonia,
             avg_ph = EXCLUDED.avg_ph,
+            latitude = EXCLUDED.latitude,
+            longitude = EXCLUDED.longitude,
             wqi_score = EXCLUDED.wqi_score,
             wqi_status = EXCLUDED.wqi_status,
             updated_at = CURRENT_TIMESTAMP;
@@ -191,7 +199,9 @@ def main():
             avg(when(col("determinand_prefLabel") == "Chemical Oxygen Demand :- {COD}", col("numeric_result"))).alias("avg_cod"),
             avg(when(col("determinand_prefLabel") == "Phosphorus, Total as P", col("numeric_result"))).alias("avg_phosphorus"),
             avg(when(col("determinand_prefLabel") == "Ammoniacal Nitrogen as N", col("numeric_result"))).alias("avg_ammonia"),
-            avg(when(col("determinand_prefLabel") == "pH", col("numeric_result"))).alias("avg_ph")
+            avg(when(col("determinand_prefLabel") == "pH", col("numeric_result"))).alias("avg_ph"),
+            first(col("samplingPoint_latitude").cast("double")).alias("latitude"),
+            first(col("samplingPoint_longitude").cast("double")).alias("longitude")
         )
 
     robust_df = windowed_df.withColumn(

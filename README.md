@@ -44,6 +44,10 @@ This project is a big data pipeline that calculates the Water Quality Index (WQI
    - PostgreSQL on port `5432`
    - pgAdmin at `http://localhost:5050`
 
+4. Delete everything
+   ```bash
+   python clear_data.py
+   ```
 
 ## Running the Pipeline
 
