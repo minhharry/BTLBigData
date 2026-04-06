@@ -10,7 +10,7 @@ This project is a big data pipeline that calculates the Water Quality Index (WQI
    - Subscribes to the `water-quality-raw` Kafka topic.
    - Cleans, parses, and filters raw sensor data.
    - Aggregates readings by sampling point.
-   - Calculates the Water Quality Index (WQI) based on up to 7 tracked parameters: pH, Dissolved Oxygen, BOD, Ammoniacal Nitrogen, Nitrate, Orthophosphate, and Temperature.
+   - Calculates the Water Quality Index (WQI)
 4. **Data Storage (PostgreSQL)**: The processed WQI scores and localized categories (e.g., Excellent, Good, Bad) are upserted into a PostgreSQL database (`wqi_scores` table). PgAdmin is deployed alongside the database for UI-based querying and administration.
 
 ## Prerequisites
@@ -68,3 +68,8 @@ python wqi_consumer.py
 Once data is streaming, you can:
 - Verify message production at **Kafka-UI**: `http://localhost:8080`
 - Query the `wqi_scores` output table using **PgAdmin**: `http://localhost:5050`
+   - Host name: `db`
+   - Port: `5432`
+   - Database: `app_database` (in .env file)
+   - User: `admin` (in .env file)
+   - Password: `your_secure_password` (in .env file)
