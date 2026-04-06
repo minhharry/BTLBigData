@@ -5,6 +5,9 @@ Consumes water quality observations from the 'water-quality-raw' Kafka topic
 using PySpark Structured Streaming, calculates a Weighted Arithmetic Water Quality 
 Index (WQI) per sampling point, and periodically flushes results to PostgreSQL.
 """
+from dotenv import load_dotenv
+
+load_dotenv()
 
 import os
 import sys
@@ -230,110 +233,66 @@ def parse_numeric_udf(val):
 def map_param_key_udf(det):
     return DETERMINAND_MAP.get(det)
 
-@F.udf(returnType=StructType([
-    StructField("wqi_score", FloatType()),
-    StructField("wqi_category", StringType()),
-    StructField("parameters_used", IntegerType())
-]))
-def calculate_wqi_udf(ph, do, bod, nh3, no3, po4, temp):
-    params = {}
-    if ph is not None: params['ph'] = ph
-    if do is not None: params['dissolved_oxygen_pct'] = do
-    if bod is not None: params['bod'] = bod
-    if nh3 is not None: params['ammoniacal_nitrogen'] = nh3
-    if no3 is not None: params['nitrate'] = no3
-    if po4 is not None: params['orthophosphate'] = po4
-    if temp is not None: params['temperature'] = temp
-    
-    res = calculate_wqi(params)
-    if not res: return None
-    score, category, count = res
-    return (float(score), category, count)
+
 
 # =============================================================================
 # WRITING TO POSTGRES
 # =============================================================================
 
-def write_partition_to_postgres(iter):
-    rows = []
-    for row in iter:
-        try:
-            rows.append((
-                row['notation'],
-                row['label'],
-                row['region'],
-                row['area'],
-                row['latitude'],
-                row['longitude'],
-                round(row['wqi_score'], 2) if row['wqi_score'] is not None else 0.0,
-                row['wqi_category'] or 'Very Bad',
-                row['parameters_used'] or 0,
-                row['ph'],
-                row['dissolved_oxygen_pct'],
-                row['bod'],
-                row['ammoniacal_nitrogen'],
-                row['nitrate'],
-                row['orthophosphate'],
-                row['temperature'],
-                row['sample_time'],
-            ))
-        except Exception as e:
-            print(f"[Worker] Error formatting row: {e}")
-            continue
 
-    if not rows:
+
+def process_batch(batch_df, batch_id):
+    # Collect batch to driver to avoid Python Worker Daemon State-Store crashes on Windows
+    rows = batch_df.collect()
+    out_rows = []
+    
+    for row in rows:
+        row_dict = row.asDict()
+        
+        params = {
+            k: row_dict.get(k) 
+            for k in WQI_PARAMS.keys() 
+            if row_dict.get(k) is not None
+        }
+        
+        res = calculate_wqi(params)
+        if not res: continue
+        
+        score, category, count = res
+        
+        out_rows.append((
+            row_dict['notation'],
+            row_dict['label'],
+            row_dict['region'],
+            row_dict['area'],
+            row_dict['latitude'],
+            row_dict['longitude'],
+            round(score, 2),
+            category,
+            count,
+            row_dict.get('ph'), 
+            row_dict.get('dissolved_oxygen_pct'), 
+            row_dict.get('bod'), 
+            row_dict.get('ammoniacal_nitrogen'), 
+            row_dict.get('nitrate'), 
+            row_dict.get('orthophosphate'), 
+            row_dict.get('temperature'),
+            row_dict['sample_time']
+        ))
+        
+    if not out_rows:
         return
-
+        
     conn = connect_db()
     try:
         with conn.cursor() as cur:
-            execute_values(cur, UPSERT_SQL, rows)
+            execute_values(cur, UPSERT_SQL, out_rows)
         conn.commit()
     except Exception as e:
         conn.rollback()
-        print(f"[DB] Error upserting {len(rows)} rows: {e}")
+        print(f"[DB] Error upserting {len(out_rows)} rows: {e}")
     finally:
         conn.close()
-
-def process_batch(batch_df, batch_id):
-    # This runs on the driver for each micro-batch (FLUSH_INTERVAL)
-    # The dataframe 'batch_df' has the raw parsed rows.
-    
-    valid_determinands = list(DETERMINAND_MAP.keys())
-    df_filtered = batch_df.filter(F.col("determinand").isin(valid_determinands))
-    
-    df_clean = df_filtered.withColumn("param_key", map_param_key_udf("determinand")) \
-                          .withColumn("numeric_value", parse_numeric_udf("result")) \
-                          .withColumn("latitude_val", parse_numeric_udf("latitude")) \
-                          .withColumn("longitude_val", parse_numeric_udf("longitude")) \
-                          .filter(F.col("numeric_value").isNotNull() & F.col("notation").isNotNull())
-
-    agg_exprs = [
-        F.last("prefLabel", ignorenulls=True).alias("label"),
-        F.last("region", ignorenulls=True).alias("region"),
-        F.last("area", ignorenulls=True).alias("area"),
-        F.last("latitude_val", ignorenulls=True).alias("latitude"),
-        F.last("longitude_val", ignorenulls=True).alias("longitude"),
-        F.max("sample_time").alias("sample_time")
-    ]
-    
-    for param in WQI_PARAMS.keys():
-        agg_exprs.append(
-            F.last(F.when(F.col("param_key") == param, F.col("numeric_value")), ignorenulls=True).alias(param)
-        )
-        
-    df_agg = df_clean.groupBy("notation").agg(*agg_exprs)
-    
-    df_wqi = df_agg.withColumn(
-        "wqi_res",
-        calculate_wqi_udf("ph", "dissolved_oxygen_pct", "bod", "ammoniacal_nitrogen", "nitrate", "orthophosphate", "temperature")
-    ).filter(F.col("wqi_res").isNotNull()) \
-     .withColumn("wqi_score", F.col("wqi_res.wqi_score")) \
-     .withColumn("wqi_category", F.col("wqi_res.wqi_category")) \
-     .withColumn("parameters_used", F.col("wqi_res.parameters_used"))
-
-    # Execute the DAG and send partition data to PostgreSQL
-    df_wqi.rdd.foreachPartition(write_partition_to_postgres)
 
 # =============================================================================
 # MAIN LOOP
@@ -387,10 +346,46 @@ def run():
             "json['samplingPoint.area'] as area",
             "json['samplingPoint.latitude'] as latitude",
             "json['samplingPoint.longitude'] as longitude",
-            "json['phenomenonTime'] as sample_time"
+            "json['phenomenonTime'] as sample_time_str"
+        )
+
+    valid_determinands = list(DETERMINAND_MAP.keys())
+    
+    clean_stream = parsed_stream \
+        .filter(F.col("determinand").isin(valid_determinands)) \
+        .withColumn("param_key", map_param_key_udf("determinand")) \
+        .withColumn("numeric_value", parse_numeric_udf("result")) \
+        .withColumn("latitude_val", parse_numeric_udf("latitude")) \
+        .withColumn("longitude_val", parse_numeric_udf("longitude")) \
+        .withColumn("sample_time_ts", F.to_timestamp("sample_time_str")) \
+        .withColumn("sample_time", F.col("sample_time_str")) \
+        .filter(F.col("numeric_value").isNotNull() & F.col("notation").isNotNull() & F.col("sample_time_ts").isNotNull())
+
+    agg_exprs = [
+        F.last("prefLabel", ignorenulls=True).alias("label"),
+        F.last("region", ignorenulls=True).alias("region"),
+        F.last("area", ignorenulls=True).alias("area"),
+        F.last("latitude_val", ignorenulls=True).alias("latitude"),
+        F.last("longitude_val", ignorenulls=True).alias("longitude"),
+        F.max("sample_time").alias("sample_time")
+    ]
+    
+    for param in WQI_PARAMS.keys():
+        agg_exprs.append(
+            F.last(F.when(F.col("param_key") == param, F.col("numeric_value")), ignorenulls=True).alias(param)
         )
         
-    query = parsed_stream.writeStream \
+    # Apply watermark and time window grouping fully natively
+    windowed_agg = clean_stream \
+        .withWatermark("sample_time_ts", "3 hours") \
+        .groupBy(
+            F.window("sample_time_ts", "3 hours"),
+            "notation"
+        ) \
+        .agg(*agg_exprs)
+
+    query = windowed_agg.writeStream \
+        .outputMode("update") \
         .trigger(processingTime=FLUSH_INTERVAL) \
         .foreachBatch(process_batch) \
         .start()
