@@ -18,7 +18,9 @@ services:
       - KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1
       - KAFKA_LOG_DIRS=/var/lib/kafka/data
     volumes:
-      - ${KAFKA_DATA_PATH}:/var/lib/kafka/data
+      - ${DATA_PATH}/kafka/data:/var/lib/kafka/data
+      - ${DATA_PATH}/kafka/config:/mnt/shared/config
+      - ${DATA_PATH}/kafka/secrets:/etc/kafka/secrets
 
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
@@ -42,7 +44,7 @@ services:
     ports:
       - "5432:5432"
     volumes:
-      - ${POSTGRES_DATA_PATH}:/var/lib/postgresql
+      - ${DATA_PATH}/postgres:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -d ${POSTGRES_DB} -U ${POSTGRES_USER}"]
       interval: 10s
@@ -62,4 +64,4 @@ services:
       db:
         condition: service_healthy
     volumes:
-      - ${PGADMIN_DATA_PATH}:/var/lib/pgadmin
+      - ${DATA_PATH}/pgadmin:/var/lib/pgadmin
