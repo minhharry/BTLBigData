@@ -7,7 +7,11 @@ Index (WQI) per sampling point, and periodically flushes results to PostgreSQL.
 """
 
 import os
+import sys
 import time
+
+os.environ['PYSPARK_PYTHON'] = sys.executable
+os.environ['PYSPARK_DRIVER_PYTHON'] = sys.executable
 
 import psycopg2
 from psycopg2.extras import execute_values
@@ -349,10 +353,17 @@ def run():
     # Initialize PostgreSQL Tables
     init_db()
 
+    import pyspark
+    spark_version = pyspark.__version__
+    scala_version = "2.13" if int(spark_version.split('.')[0]) >= 4 else "2.12"
+    kafka_pkg = f"org.apache.spark:spark-sql-kafka-0-10_{scala_version}:{spark_version}"
+
     # Need the spark-sql-kafka driver so we include it as package
     spark = SparkSession.builder \
         .appName("WQIConsumerSpark") \
-        .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0") \
+        .config("spark.jars.packages", kafka_pkg) \
+        .config("spark.python.worker.faulthandler.enabled", "true") \
+        .config("spark.sql.execution.pyspark.udf.faulthandler.enabled", "true") \
         .getOrCreate()
         
     spark.sparkContext.setLogLevel("WARN")

@@ -49,19 +49,20 @@ This project is a big data pipeline that calculates the Water Quality Index (WQI
 
 Ensure that your local virtual environment is active in any terminal before running the Python scripts (`.venv\Scripts\activate`).
 
-### 1. Start the Stream Processor (Consumer)
-Run the PySpark consumer to listen for incoming messages, calculate the WQI, and write the grouped results to PostgreSQL:
-```bash
-python wqi_consumer.py
-```
-*Note: This process runs continuously. Keep this running in its own terminal.*
-
-### 2. Start the Data Producer
-In a separate terminal (with the `.venv` activated), start the producer script to begin streaming the raw CSV observation data into Kafka:
+### 1. Start the Data Producer
+Start the producer script to begin streaming the raw CSV observation data into Kafka:
 ```bash
 .venv\Scripts\activate
 python producer.py
 ```
+*Note: This process runs continuously. Keep this running in its own terminal.*
+
+### 2. Start the Stream Processor (Consumer)
+In a separate terminal (with the `.venv` activated), Run the PySpark consumer to listen for incoming messages, calculate the WQI, and write the grouped results to PostgreSQL:
+```bash
+python wqi_consumer.py
+```
+*Note: This process runs continuously. Keep this running in its own terminal.*
 
 ### 3. Verification & Analysis
 Once data is streaming, you can:
