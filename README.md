@@ -16,7 +16,7 @@ This project is a big data pipeline that calculates the Water Quality Index (WQI
 ## Prerequisites
 
 - **Docker & Docker Compose**: Needed to run Apache Kafka, PostgreSQL, Kafka-UI, and pgAdmin.
-- **Python >= 3.13**
+- **Python >= 3.11**
 - **uv**: Recommended fast package manager for Python dependency management.
 
 ## Setup Instructions
@@ -28,9 +28,8 @@ This project is a big data pipeline that calculates the Water Quality Index (WQI
 2. **Install Dependencies**
    The project uses `uv` for dependency management. Create a virtual environment and synchronize the dependencies:
    ```bash
-   uv venv
-   .venv\Scripts\activate
    uv sync
+   .venv\Scripts\activate
    ```   
 
 3. **Start the Infrastructure**
