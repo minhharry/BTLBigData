@@ -1,78 +1,93 @@
-# Water Quality Index (WQI) Data Pipeline
+# UK Water Quality Real-Time Monitoring & Prediction Pipeline
 
-This project is a big data pipeline that calculates the Water Quality Index (WQI) from raw water quality observations. It streams sensor/observation data via Apache Kafka, processes and enriches it in real-time using PySpark Structured Streaming, and stores the resulting WQI scores into a PostgreSQL database for analysis.
+This project is a big data pipeline that processes UK water quality observation data in real-time. It streams data via Apache Kafka, performs stateful aggregation using PySpark Structured Streaming, executes time-series forecasting using multiple machine learning models, and visualizes the results through an interactive Streamlit dashboard.
 
 ## Architecture
 
-1. **Data Ingestion (`producer.py`)**: Simulating realtime ingestion by reads raw water quality observation data from a CSV file (`data/observations-2026-4-3-sorted.csv`) and publishes each observation as a JSON message to an Apache Kafka topic (`water-quality-raw`).
-2. **Message Broker (Apache Kafka)**: Handled via Docker Compose. Brokers the real-time messages. Kafka-UI is included for monitoring topics, partitions, and messages.
-3. **Stream Processing (`wqi_consumer.py`)**: A PySpark Structured Streaming application. 
-   - Subscribes to the `water-quality-raw` Kafka topic.
-   - Cleans, parses, and filters raw sensor data.
-   - Aggregates readings by sampling point.
-   - Calculates the Water Quality Index (WQI)
-4. **Data Storage (PostgreSQL)**: The processed WQI scores and localized categories (e.g., Excellent, Good, Bad) are upserted into a PostgreSQL database (`wqi_scores` table). PgAdmin is deployed alongside the database for UI-based querying and administration.
+1.  **Data Ingestion (`producer.py`)**: Simulates real-time data flow by reading historical water quality observations from a CSV file (`data/observations-2026-4-3-sorted.csv`) and publishing them as JSON messages to the `water-quality-raw` Kafka topic.
+2.  **Message Broker (Apache Kafka)**: Managed via Docker Compose. Handles the high-throughput stream of raw observation data.
+3.  **Stream Processing & ML (`region_consumer.py`)**: A PySpark Structured Streaming application that:
+    *   Subscribes to the `water-quality-raw` Kafka topic.
+    *   Parses and cleans the JSON payload, handling numeric conversions (including detection limit cases like `<0.1`).
+    *   Performs windowed aggregations (Daily) grouped by **Region**, **Sample Material Type**, and **Determinand**.
+    *   Calculates statistical metrics: Average, Standard Deviation, and Sample Count.
+    *   **Forecasting Phase**: For groups with sufficient data, it triggers a prediction pipeline using `LinearRegression`, `XGBoost`, `ARIMA`, and `ETS` models to forecast future water quality levels.
+4.  **Data Storage (PostgreSQL)**: Stores aggregated daily averages and future predictions in separate tables (`region_daily_averages` and `daily_predictions`).
+5.  **Visualization (`app.py`)**: A Streamlit dashboard that allows users to explore regional water quality trends and compare actual data with model predictions.
 
 ## Prerequisites
 
-- **Docker & Docker Compose**: Needed to run Apache Kafka, PostgreSQL, Kafka-UI, and pgAdmin.
-- **Python >= 3.11**
-- **uv**: Recommended fast package manager for Python dependency management.
+*   **Docker & Docker Compose**: To run Kafka, PostgreSQL, Kafka-UI, and pgAdmin.
+*   **Python >= 3.11**
+*   **uv**: Fast Python package manager (required for dependency management).
+*   **Java (JRE/JDK)**: Required for PySpark.
 
 ## Setup Instructions
-1. **Configure Environment**
-   Copy the example environment file and adjust the variables as needed:
-   ```bash
-   cp .env.example .env
-   ```
-2. **Install Dependencies**
-   The project uses `uv` for dependency management. Create a virtual environment and synchronize the dependencies:
-   ```bash
-   uv sync
-   .venv\Scripts\activate
-   ```   
 
-3. **Start the Infrastructure**
-   Run the following command to spin up the required Docker containers:
-   ```bash
-   docker-compose up -d
-   ```
-   This starts:
-   - Kafka on port `9092`
-   - Kafka-UI at `http://localhost:8080`
-   - PostgreSQL on port `5432`
-   - pgAdmin at `http://localhost:5050`
+1.  **Configure Environment**
+    Copy the example environment file and adjust the variables if necessary:
+    ```powershell
+    cp .env.example .env
+    ```
 
-4. Delete everything
-   ```bash
-   python clear_data.py
-   ```
+2.  **Install Dependencies**
+    Use `uv` to create a virtual environment and install all required packages:
+    ```powershell
+    uv sync
+    ```
+
+3.  **Start Infrastructure**
+    Launch the required services using Docker Compose:
+    ```powershell
+    docker-compose up -d
+    ```
+    This starts:
+    *   **Kafka**: `localhost:9092`
+    *   **Kafka-UI**: `http://localhost:8080` (Monitor topics and messages)
+    *   **PostgreSQL**: `localhost:5432`
+    *   **pgAdmin**: `http://localhost:5050` (Database management)
+
+4.  **Initialize/Clear Data (Optional)**
+    If you need to reset the database before starting:
+    ```powershell
+    .venv\Scripts\activate
+    python clear_data.py
+    ```
 
 ## Running the Pipeline
 
-Ensure that your local virtual environment is active in any terminal before running the Python scripts (`.venv\Scripts\activate`).
+Ensure your virtual environment is active in every terminal: `.venv\Scripts\activate`.
 
 ### 1. Start the Data Producer
-Start the producer script to begin streaming the raw CSV observation data into Kafka:
-```bash
-.venv\Scripts\activate
+Publishes raw observations to Kafka:
+```powershell
 python producer.py
 ```
-*Note: This process runs continuously. Keep this running in its own terminal.*
 
 ### 2. Start the Stream Processor (Consumer)
-In a separate terminal (with the `.venv` activated), Run the PySpark consumer to listen for incoming messages, calculate the WQI, and write the grouped results to PostgreSQL:
-```bash
-python wqi_consumer.py
+Processes the stream, calculates daily stats, and generates predictions:
+```powershell
+python region_consumer.py
 ```
-*Note: This process runs continuously. Keep this running in its own terminal.*
+*Note: This process requires PySpark. Ensure Java is installed and `SPARK_HOME` or path is configured if necessary, though the script handles local execution.*
 
-### 3. Verification & Analysis
-Once data is streaming, you can:
-- Verify message production at **Kafka-UI**: `http://localhost:8080`
-- Query the `wqi_scores` output table using **PgAdmin**: `http://localhost:5050`
-   - Host name: `db`
-   - Port: `5432`
-   - Database: `app_database` (in .env file)
-   - User: `admin` (in .env file)
-   - Password: `your_secure_password` (in .env file)
+### 3. Launch the Dashboard
+Visualize the processed data and predictions:
+```powershell
+streamlit run app.py
+```
+
+## Additional Tools
+
+*   **`analyze_data.py`**: A standalone script for batch analysis of the raw CSV dataset to understand the distribution of regions, materials, and determinands.
+*   **`models/`**: Contains the `WaterQualityPredictor` logic used by the consumer for forecasting.
+
+## Monitoring & Access
+
+*   **Kafka-UI**: `http://localhost:8080`
+*   **Streamlit App**: `http://localhost:8501` (by default)
+*   **pgAdmin**: `http://localhost:5050`
+    *   **Host**: `db` (inside docker)
+    *   **Maintenance DB**: `app_database`
+    *   **Username**: `admin`
+    *   **Password**: See `.env` file
