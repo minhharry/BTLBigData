@@ -1,3 +1,8 @@
+"""
+Kafka producer for streaming water quality observations from CSV to Kafka.
+Supports checkpointing to resume from the last sent message.
+"""
+
 import csv
 import json
 import time
@@ -5,11 +10,10 @@ import os
 from kafka import KafkaProducer
 from kafka.errors import NoBrokersAvailable
 
-# CONFIGURATION
 BOOTSTRAP_SERVERS = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092').split(',')
 TOPIC_NAME = 'water-quality-raw'
 CSV_FILE_PATH = 'data/observations-2026-4-3-sorted.csv'
-BATCH_SIZE = 1000  # Number of messages before flushing
+BATCH_SIZE = 1000
 DELAY_SECONDS = 0.0
 CHECKPOINT_FILE = 'data/producer_checkpoint.txt'
 
@@ -27,7 +31,6 @@ def get_checkpoint():
 def save_checkpoint(count):
     """Save the current message count to the checkpoint file."""
     try:
-        # Create directory if it doesn't exist
         os.makedirs(os.path.dirname(CHECKPOINT_FILE), exist_ok=True)
         with open(CHECKPOINT_FILE, 'w') as f:
             f.write(str(count))
@@ -51,6 +54,7 @@ def create_producer():
             time.sleep(5)
 
 def stream_csv_to_kafka():
+    """Read rows from CSV and send them to Kafka topic."""
     if not os.path.exists(CSV_FILE_PATH):
         print(f"Error: CSV file '{CSV_FILE_PATH}' not found.")
         return
@@ -64,18 +68,15 @@ def stream_csv_to_kafka():
     
     try:
         with open(CSV_FILE_PATH, mode='r', encoding='utf-8') as f:
-            # Using DictReader for easier mapping to JSON
             reader = csv.DictReader(f)
             
             if last_sent_count > 0:
                 print(f"Resuming from message {last_sent_count}...")
-                # Skip already sent rows
                 for _ in range(last_sent_count):
                     next(reader, None)
                 count = last_sent_count
             
             for row in reader:
-                # Send the row as a dictionary (KafkaProducer value_serializer handles JSON)
                 producer.send(TOPIC_NAME, value=row)
                 
                 count += 1
@@ -86,7 +87,6 @@ def stream_csv_to_kafka():
                     rate = count / elapsed if elapsed > 0 else 0
                     print(f"Sent {count} messages... Rate: {rate:.2f} msg/sec")
                 
-                # Small sleep to simulate real-time stream
                 if DELAY_SECONDS > 0:
                     time.sleep(DELAY_SECONDS)
                 

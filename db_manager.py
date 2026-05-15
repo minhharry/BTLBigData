@@ -1,0 +1,208 @@
+import os
+import pandas as pd
+import psycopg2
+from psycopg2.extras import DictCursor
+from dotenv import load_dotenv
+
+load_dotenv()
+
+class DatabaseManager:
+    def __init__(self):
+        self.host = os.getenv("PG_HOST", "localhost")
+        self.port = os.getenv("PG_PORT", "5432")
+        self.dbname = os.getenv("POSTGRES_DB", "app_database")
+        self.user = os.getenv("POSTGRES_USER", "admin")
+        self.password = os.getenv("POSTGRES_PASSWORD", "your_secure_password")
+
+    def _get_connection(self):
+        return psycopg2.connect(
+            host=self.host,
+            port=self.port,
+            dbname=self.dbname,
+            user=self.user,
+            password=self.password
+        )
+
+    def get_unique_regions(self):
+        """Fetch unique regions and their total sample counts."""
+        query = """
+            SELECT region, SUM(num_samples) as total_samples
+            FROM region_daily_averages
+            GROUP BY region
+            ORDER BY total_samples DESC;
+        """
+        return self._fetch_as_df(query)
+
+    def get_materials_for_regions(self, regions):
+        """Fetch materials for the selected regions."""
+        if not regions:
+            return pd.DataFrame()
+        query = """
+            SELECT sample_material_type, SUM(num_samples) as total_samples
+            FROM region_daily_averages
+            WHERE region IN %s
+            GROUP BY sample_material_type
+            ORDER BY total_samples DESC;
+        """
+        return self._fetch_as_df(query, (tuple(regions),))
+
+    def get_determinands_for_filter(self, regions, material):
+        """Fetch determinands for the selected regions and material."""
+        if not regions or not material:
+            return pd.DataFrame()
+        query = """
+            SELECT determinand_label, SUM(num_samples) as total_samples
+            FROM region_daily_averages
+            WHERE region IN %s AND sample_material_type = %s
+            GROUP BY determinand_label
+            ORDER BY total_samples DESC;
+        """
+        return self._fetch_as_df(query, (tuple(regions), material))
+
+    def get_historical_data(self, regions, material, determinand):
+        """Fetch daily averages for specific filters."""
+        if not regions or not material or not determinand:
+            return pd.DataFrame()
+        query = """
+            SELECT region, sample_material_type, determinand_label, unit,
+                   window_start, window_end, avg_result, std_result, num_samples
+            FROM region_daily_averages
+            WHERE region IN %s 
+              AND sample_material_type = %s 
+              AND determinand_label = %s
+            ORDER BY window_start;
+        """
+        return self._fetch_as_df(query, (tuple(regions), material, determinand))
+
+    def get_predictions(self, regions, material, determinand, model_name=None):
+        """Fetch predictions for specific filters."""
+        if not regions or not material or not determinand:
+            return pd.DataFrame()
+        
+        params = [tuple(regions), material, determinand]
+        model_filter = ""
+        if model_name:
+            model_filter = "AND model_name = %s"
+            params.append(model_name)
+            
+        query = f"""
+            SELECT region, sample_material_type, determinand_label, unit,
+                   model_name, prediction_date, target_date, predicted_value
+            FROM daily_predictions
+            WHERE region IN %s 
+              AND sample_material_type = %s 
+              AND determinand_label = %s
+              {model_filter}
+            ORDER BY target_date;
+        """
+        return self._fetch_as_df(query, tuple(params))
+
+    def get_available_models(self):
+        """Fetch unique model names."""
+        query = "SELECT DISTINCT model_name FROM daily_predictions;"
+        df = self._fetch_as_df(query)
+        return df['model_name'].tolist() if not df.empty else []
+
+    def get_anomalies(self, start_date=None, end_date=None, material="All", determinand="All"):
+        """Fetch anomalies with filters."""
+        filters = []
+        params = []
+        
+        if start_date:
+            filters.append("window_start::date >= %s")
+            params.append(start_date)
+        if end_date:
+            filters.append("window_start::date <= %s")
+            params.append(end_date)
+        if material != "All":
+            filters.append("sample_material_type = %s")
+            params.append(material)
+        if determinand != "All":
+            filters.append("determinand_label = %s")
+            params.append(determinand)
+            
+        where_clause = "WHERE " + " AND ".join(filters) if filters else ""
+        
+        query = f"""
+            SELECT station_id, station_name, longitude, latitude, sample_material_type,
+                   determinand_label, unit, window_start, avg_result, z_score, is_anomaly
+            FROM station_anomalies
+            {where_clause}
+            ORDER BY window_start DESC;
+        """
+        return self._fetch_as_df(query, tuple(params) if params else None)
+
+    def get_anomaly_metadata(self):
+        """Fetch metadata for anomaly filters (dates, materials, determinands)."""
+        dates_query = "SELECT MIN(window_start::date), MAX(window_start::date) FROM station_anomalies;"
+        materials_query = "SELECT sample_material_type, COUNT(*) FROM station_anomalies GROUP BY sample_material_type ORDER BY COUNT(*) DESC;"
+        determinands_query = "SELECT determinand_label, COUNT(*) FROM station_anomalies GROUP BY determinand_label ORDER BY COUNT(*) DESC;"
+        
+        dates = self._fetch_as_df(dates_query)
+        materials = self._fetch_as_df(materials_query)
+        determinands = self._fetch_as_df(determinands_query)
+        
+        return {
+            "min_date": dates.iloc[0, 0] if not dates.empty else None,
+            "max_date": dates.iloc[0, 1] if not dates.empty else None,
+            "materials": materials,
+            "determinands": determinands
+        }
+
+    def get_gqa_data(self, start_date=None, end_date=None, material="All"):
+        """Fetch GQA data with filters."""
+        filters = []
+        params = []
+        
+        if start_date:
+            filters.append("window_start::date >= %s")
+            params.append(start_date)
+        if end_date:
+            filters.append("window_start::date <= %s")
+            params.append(end_date)
+        if material != "All":
+            filters.append("sample_material_type = %s")
+            params.append(material)
+            
+        where_clause = "WHERE " + " AND ".join(filters) if filters else ""
+        
+        query = f"""
+            SELECT region, sample_material_type, window_start, window_end,
+                   gqa_grade, do_value, bod_value, ammonia_value, latitude, longitude
+            FROM region_daily_gqa
+            {where_clause}
+            ORDER BY window_start;
+        """
+        return self._fetch_as_df(query, tuple(params) if params else None)
+
+    def get_gqa_metadata(self):
+        """Fetch metadata for GQA filters."""
+        dates_query = "SELECT MIN(window_start::date), MAX(window_start::date) FROM region_daily_gqa;"
+        materials_query = "SELECT sample_material_type, COUNT(*) FROM region_daily_gqa GROUP BY sample_material_type ORDER BY COUNT(*) DESC;"
+        
+        dates = self._fetch_as_df(dates_query)
+        materials = self._fetch_as_df(materials_query)
+        
+        return {
+            "min_date": dates.iloc[0, 0] if not dates.empty else None,
+            "max_date": dates.iloc[0, 1] if not dates.empty else None,
+            "materials": materials
+        }
+
+    def _fetch_as_df(self, query, params=None):
+        conn = None
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            columns = [desc[0] for desc in cursor.description]
+            df = pd.DataFrame(rows, columns=columns)
+            cursor.close()
+            return df
+        except Exception as e:
+            print(f"Database error: {e}")
+            return pd.DataFrame()
+        finally:
+            if conn:
+                conn.close()

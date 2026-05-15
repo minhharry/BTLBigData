@@ -1,188 +1,224 @@
-import os
-import pandas as pd
-import psycopg2
+"""
+Water Quality Monitoring Dashboard.
+Real-time analysis and anomaly detection for water quality across England.
+"""
+
 import streamlit as st
 import plotly.express as px
-from dotenv import load_dotenv
+import pandas as pd
+from db_manager import DatabaseManager
 
-# Load environment variables
-load_dotenv()
+# Initialize Database Manager
+db = DatabaseManager()
 
-# Database connection settings
-PG_HOST = os.getenv("PG_HOST", "localhost")
-PG_PORT = os.getenv("PG_PORT", "5432")
-POSTGRES_DB = os.getenv("POSTGRES_DB", "app_database")
-POSTGRES_USER = os.getenv("POSTGRES_USER", "admin")
-POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", "your_secure_password")
-
-# Set page config
 st.set_page_config(page_title="Water Quality Dashboard", layout="wide")
 
-@st.cache_data(ttl=60)
-def fetch_data():
-    """Fetch all data from the region_daily_averages table."""
-    try:
-        conn = psycopg2.connect(
-            host=PG_HOST,
-            port=PG_PORT,
-            dbname=POSTGRES_DB,
-            user=POSTGRES_USER,
-            password=POSTGRES_PASSWORD
-        )
-        query = """
-            SELECT region, sample_material_type, determinand_label, unit,
-                   window_start, window_end, avg_result, std_result, num_samples, updated_at
-            FROM region_daily_averages
-            ORDER BY window_start;
-        """
-        cursor = conn.cursor()
-        cursor.execute(query)
-        rows = cursor.fetchall()
-        columns = [desc[0] for desc in cursor.description]
-        df = pd.DataFrame(rows, columns=columns)
-        cursor.close()
-        conn.close()
-        return df
-    except Exception as e:
-        st.error(f"Error connecting to the database: {e}")
-        return pd.DataFrame()
+# --- UI Helper Functions ---
 
 @st.cache_data(ttl=60)
-def fetch_predictions():
-    """Fetch prediction data."""
-    try:
-        conn = psycopg2.connect(
-            host=PG_HOST, port=PG_PORT, dbname=POSTGRES_DB,
-            user=POSTGRES_USER, password=POSTGRES_PASSWORD
-        )
-        query = """
-            SELECT region, sample_material_type, determinand_label, unit,
-                   model_name, prediction_date, target_date, predicted_value
-            FROM daily_predictions
-            ORDER BY target_date;
-        """
-        cursor = conn.cursor()
-        cursor.execute(query)
-        rows = cursor.fetchall()
-        columns = [desc[0] for desc in cursor.description]
-        df = pd.DataFrame(rows, columns=columns)
-        cursor.close()
-        conn.close()
-        return df
-    except Exception as e:
-        # Table might not exist yet
-        return pd.DataFrame()
+def get_regions():
+    return db.get_unique_regions()
 
-# Main app layout
-st.title("💧 Water Quality Daily Averages Dashboard")
-st.markdown("Visualize data produced by the `region_consumer.py` pipeline.")
+@st.cache_data(ttl=60)
+def get_materials(regions):
+    return db.get_materials_for_regions(regions)
 
-# Fetch data
-df = fetch_data()
-pred_df = fetch_predictions()
+@st.cache_data(ttl=60)
+def get_determinands(regions, material):
+    return db.get_determinands_for_filter(regions, material)
 
-if df.empty:
-    st.warning("No data found in the database or failed to connect. Please ensure `region_consumer.py` is running and has populated the database.")
-else:
-    # Ensure window_start is datetime
-    df['window_start'] = pd.to_datetime(df['window_start'])
+@st.cache_data(ttl=60)
+def get_historical(regions, material, determinand):
+    return db.get_historical_data(regions, material, determinand)
 
-    st.header("Data Exploration")
+@st.cache_data(ttl=60)
+def get_predictions(regions, material, determinand, model_name=None):
+    return db.get_predictions(regions, material, determinand, model_name)
+
+@st.cache_data(ttl=60)
+def get_anomalies(start_date, end_date, material, determinand):
+    return db.get_anomalies(start_date, end_date, material, determinand)
+
+@st.cache_data(ttl=60)
+def get_gqa(start_date, end_date, material):
+    return db.get_gqa_data(start_date, end_date, material)
+
+# --- Main Dashboard ---
+
+st.title("Water Quality Monitoring Dashboard")
+st.markdown("Real-time analysis and anomaly detection for water quality across England.")
+
+tab1, tab2, tab3 = st.tabs(["Historical Trends", "Anomaly Detection Map", "Regional GQA Map"])
+
+# --- Tab 1: Historical Trends ---
+with tab1:
+    st.header("Regional Historical Trends")
     
-    # 1. Region selection
-    region_counts = df.groupby('region')['num_samples'].sum().sort_values(ascending=False)
-    regions = [f"{r} ({int(c)})" for r, c in region_counts.items()]
-    
-    select_all_regions = st.checkbox("Select All Regions")
-    
-    if select_all_regions:
-        selected_region_strs = regions
+    region_df = get_regions()
+    if region_df.empty:
+        st.warning("No data found in the database. Please ensure the pipeline is running.")
     else:
-        selected_region_strs = st.multiselect("1. Select Region(s)", regions)
+        # 1. Select Regions
+        region_options = [f"{r} ({int(c)})" for r, c in zip(region_df['region'], region_df['total_samples'])]
+        selected_region_strs = st.multiselect("1. Select Region(s)", region_options)
+        
+        if selected_region_strs:
+            selected_regions = [s.rsplit(' (', 1)[0] for s in selected_region_strs]
+            
+            # 2. Select Material
+            material_df = get_materials(selected_regions)
+            material_options = [f"{m} ({int(c)})" for m, c in zip(material_df['sample_material_type'], material_df['total_samples'])]
+            selected_material_str = st.selectbox("2. Select a Sample Material Type", [""] + material_options)
+            
+            if selected_material_str:
+                selected_material = selected_material_str.rsplit(' (', 1)[0]
+                
+                # 3. Select Determinand
+                det_df = get_determinands(selected_regions, selected_material)
+                det_options = [f"{d} ({int(c)})" for d, c in zip(det_df['determinand_label'], det_df['total_samples'])]
+                selected_determinand_str = st.selectbox("3. Select a Determinand Label", [""] + det_options)
+                
+                if selected_determinand_str:
+                    selected_determinand = selected_determinand_str.rsplit(' (', 1)[0]
+                    
+                    # Fetch final data
+                    final_df = get_historical(selected_regions, selected_material, selected_determinand)
+                    
+                    if not final_df.empty:
+                        st.subheader(f"Results for {selected_determinand}")
+                        
+                        # Prediction controls
+                        show_predictions = st.checkbox("Show Predictions", value=True)
+                        available_models = db.get_available_models()
+                        selected_model = None
+                        if show_predictions and available_models:
+                            selected_model = st.selectbox("Prediction Model", available_models)
+                        
+                        unit_label = final_df['unit'].iloc[0] if pd.notna(final_df['unit'].iloc[0]) else "Unit"
+                        
+                        fig = px.line(
+                            final_df, 
+                            x='window_start', 
+                            y='avg_result', 
+                            color='region',
+                            title=f"{selected_determinand} Levels over Time",
+                            markers=True,
+                            error_y='std_result',
+                            hover_data=['unit', 'num_samples', 'std_result'],
+                            labels={'avg_result': f'Avg ({unit_label})', 'window_start': 'Date'}
+                        )
+                        
+                        if show_predictions and selected_model:
+                            pred_df = get_predictions(selected_regions, selected_material, selected_determinand, selected_model)
+                            if not pred_df.empty:
+                                pred_df['target_date'] = pd.to_datetime(pred_df['target_date'])
+                                latest_preds = pred_df.sort_values('prediction_date', ascending=False).groupby(['region', 'target_date']).first().reset_index()
+                                
+                                for region in selected_regions:
+                                    region_preds = latest_preds[latest_preds['region'] == region]
+                                    if not region_preds.empty:
+                                        fig.add_scatter(
+                                            x=region_preds['target_date'],
+                                            y=region_preds['predicted_value'],
+                                            mode='lines+markers',
+                                            name=f'{region} ({selected_model} Pred)',
+                                            line=dict(dash='dash'),
+                                        )
+
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        with st.expander("View Raw Data"):
+                            st.dataframe(final_df.sort_values('window_start', ascending=False))
+
+# --- Tab 2: Anomaly Detection Map ---
+with tab2:
+    st.header("Anomalous Activity Across England")
     
-    if selected_region_strs:
-        selected_regions = [s.rsplit(' (', 1)[0] for s in selected_region_strs]
-        region_df = df[df['region'].isin(selected_regions)]
+    meta = db.get_anomaly_metadata()
+    if meta['min_date'] is None:
+        st.info("No anomalies detected yet.")
+    else:
+        col1, col2 = st.columns(2)
+        with col1:
+            all_dates = pd.date_range(start=meta['min_date'], end=meta['max_date']).date.tolist()
+            if len(all_dates) > 1:
+                date_range = st.select_slider("Select Date Range", options=all_dates, value=(min(all_dates), max(all_dates)))
+                start_date, end_date = date_range
+            else:
+                start_date = end_date = all_dates[0]
+                st.info(f"Showing data for {start_date}")
         
-        # 2. Sample Material Type selection
-        material_counts = region_df.groupby('sample_material_type')['num_samples'].sum().sort_values(ascending=False)
-        materials = [f"{m} ({int(c)})" for m, c in material_counts.items()]
-        selected_material_str = st.selectbox("2. Select a Sample Material Type", [""] + materials)
+        with col2:
+            mat_options = [f"{m} ({c})" for m, c in zip(meta['materials']['sample_material_type'], meta['materials']['count'])]
+            selected_material_map_str = st.selectbox("Select Material Type", ["All"] + mat_options, key="ano_mat")
+            selected_material_map = selected_material_map_str.rsplit(' (', 1)[0] if selected_material_map_str != "All" else "All"
+            
+            det_options = [f"{d} ({c})" for d, c in zip(meta['determinands']['determinand_label'], meta['determinands']['count'])]
+            selected_determinand_map_str = st.selectbox("Select Determinand", ["All"] + det_options, key="ano_det")
+            selected_determinand_map = selected_determinand_map_str.rsplit(' (', 1)[0] if selected_determinand_map_str != "All" else "All"
+
+        anomaly_df = get_anomalies(start_date, end_date, selected_material_map, selected_determinand_map)
         
-        if selected_material_str:
-            selected_material = selected_material_str.rsplit(' (', 1)[0]
-            material_df = region_df[region_df['sample_material_type'] == selected_material]
-            
-            # 3. Determinand Label selection
-            determinand_counts = material_df.groupby('determinand_label')['num_samples'].sum().sort_values(ascending=False)
-            determinands = [f"{d} ({int(c)})" for d, c in determinand_counts.items()]
-            selected_determinand_str = st.selectbox("3. Select a Determinand Label", [""] + determinands)
-            
-            if selected_determinand_str:
-                selected_determinand = selected_determinand_str.rsplit(' (', 1)[0]
-                final_df = material_df[material_df['determinand_label'] == selected_determinand]
-                
-                st.subheader(f"Results for {selected_determinand}")
-                
-                show_predictions = st.checkbox("Show Predictions", value=True)
-                available_models = pred_df['model_name'].unique().tolist() if not pred_df.empty else []
-                selected_model = None
-                if show_predictions and available_models:
-                    selected_model = st.selectbox("Prediction Model", available_models)
-                
-                # Plot
-                selected_regions_label = "Selected Regions" if len(selected_regions) > 1 else selected_regions[0]
-                
-                # Extract unit for labeling
-                unit_label = final_df['unit'].iloc[0] if not final_df.empty and pd.notna(final_df['unit'].iloc[0]) else "Unit"
-                
-                fig = px.line(
-                    final_df, 
-                    x='window_start', 
-                    y='avg_result', 
-                    color='region',
-                    title=f"{selected_determinand} Levels over Time in {selected_regions_label} ({selected_material})",
-                    markers=True,
-                    error_y='std_result',
-                    hover_data=['unit', 'num_samples', 'std_result'],
-                    labels={
-                        'avg_result': f'Average Result ({unit_label})', 
-                        'window_start': 'Date'
-                    }
-                )
-                
-                if show_predictions and selected_model and not pred_df.empty:
-                    model_preds = pred_df[
-                        (pred_df['region'].isin(selected_regions)) &
-                        (pred_df['sample_material_type'] == selected_material) &
-                        (pred_df['determinand_label'] == selected_determinand) &
-                        (pred_df['model_name'] == selected_model)
-                    ]
-                    if not model_preds.empty:
-                        # Ensure target_date is datetime
-                        model_preds['target_date'] = pd.to_datetime(model_preds['target_date'])
-                        
-                        # Since there might be multiple predictions for the same target_date,
-                        # let's get the latest prediction for each target_date per region
-                        latest_preds = model_preds.sort_values('prediction_date', ascending=False).groupby(['region', 'target_date']).first().reset_index()
-                        
-                        for region in selected_regions:
-                            region_preds = latest_preds[latest_preds['region'] == region]
-                            if not region_preds.empty:
-                                fig.add_scatter(
-                                    x=region_preds['target_date'],
-                                    y=region_preds['predicted_value'],
-                                    mode='lines+markers',
-                                    name=f'{region} ({selected_model} Pred)',
-                                    line=dict(dash='dash'),
-                                )
+        if anomaly_df.empty:
+            st.warning("No anomalies found for the selected filters.")
+        else:
+            fig_map = px.scatter_mapbox(
+                anomaly_df, lat="latitude", lon="longitude", color="z_score",
+                size=anomaly_df["z_score"].abs(),
+                color_continuous_scale=px.colors.diverging.RdBu_r,
+                hover_name="station_name",
+                hover_data={"window_start": True, "avg_result": True, "unit": True, "z_score": ":.2f", "determinand_label": True},
+                zoom=5.5, center={"lat": 52.8, "lon": -1.5}, height=700,
+                title=f"Anomalies from {start_date} to {end_date}"
+            )
+            fig_map.update_layout(mapbox_style="carto-positron")
+            st.plotly_chart(fig_map, use_container_width=True)
+            st.subheader("Anomaly Details")
+            st.dataframe(anomaly_df.sort_values("z_score", ascending=False))
 
-                st.plotly_chart(fig, width="stretch")
-                
-                # Data table
-                with st.expander("View Raw Data"):
-                    st.dataframe(final_df.sort_values('window_start', ascending=False))
+# --- Tab 3: Regional GQA Map ---
+with tab3:
+    st.header("Regional General Quality Assessment (GQA)")
+    
+    gqa_meta = db.get_gqa_metadata()
+    if gqa_meta['min_date'] is None:
+        st.info("No GQA data available yet.")
+    else:
+        col1, col2 = st.columns(2)
+        with col1:
+            all_dates_gqa = pd.date_range(start=gqa_meta['min_date'], end=gqa_meta['max_date']).date.tolist()
+            if len(all_dates_gqa) > 1:
+                date_range_gqa = st.select_slider("Select Date Range (GQA)", options=all_dates_gqa, value=(min(all_dates_gqa), max(all_dates_gqa)), key="gqa_date")
+                start_date_gqa, end_date_gqa = date_range_gqa
+            else:
+                start_date_gqa = end_date_gqa = all_dates_gqa[0]
+                st.info(f"Showing data for {start_date_gqa}")
+        
+        with col2:
+            gqa_mat_options = [f"{m} ({c})" for m, c in zip(gqa_meta['materials']['sample_material_type'], gqa_meta['materials']['count'])]
+            selected_material_gqa_str = st.selectbox("Select Material Type", ["All"] + gqa_mat_options, key="gqa_mat")
+            selected_material_gqa = selected_material_gqa_str.rsplit(' (', 1)[0] if selected_material_gqa_str != "All" else "All"
 
-# Footer
+        gqa_df = get_gqa(start_date_gqa, end_date_gqa, selected_material_gqa)
+        
+        if gqa_df.empty:
+            st.warning("No GQA data found for the selected filters.")
+        else:
+            gqa_df = gqa_df.sort_values("gqa_grade")
+            color_map = {'A': '#2ecc71', 'B': '#27ae60', 'C': '#f1c40f', 'D': '#e67e22', 'E': '#e74c3c', 'F': '#95a5a6'}
+            
+            fig_gqa = px.scatter_mapbox(
+                gqa_df, lat="latitude", lon="longitude", color="gqa_grade",
+                color_discrete_map=color_map, category_orders={"gqa_grade": ["A", "B", "C", "D", "E", "F"]},
+                zoom=5.5, center={"lat": 52.8, "lon": -1.5}, hover_name="region",
+                hover_data={"window_start": True, "gqa_grade": True, "do_value": ":.2f", "bod_value": ":.2f", "ammonia_value": ":.2f"},
+                height=700, title=f"Regional GQA Grades from {start_date_gqa} to {end_date_gqa}"
+            )
+            fig_gqa.update_layout(mapbox_style="carto-positron")
+            fig_gqa.update_traces(marker=dict(size=20))
+            st.plotly_chart(fig_gqa, use_container_width=True)
+            st.subheader("Regional GQA Details")
+            st.dataframe(gqa_df)
+
 st.markdown("---")
-st.caption("Data is cached for 60 seconds. Refresh the page to fetch the latest data.")
+st.caption("Data is cached for 60 seconds.")
