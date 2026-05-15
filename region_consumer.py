@@ -145,14 +145,15 @@ def process_batch(df, epoch_id):
     # Run predictions for groups that have num_samples >= 10 in this batch
     try:
         from models.predictor import WaterQualityPredictor
-        predictor = WaterQualityPredictor()
         
         predictable_groups = [row for row in rows if row.num_samples >= 10]
         
         if predictable_groups:
-            predictor.train_and_predict_batch(
-                predictable_groups, PG_HOST, PG_PORT, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
-            )
+            for model_name in ["LinearRegression", "XGBoost", "ARIMA", "ETS"]:
+                predictor = WaterQualityPredictor(model_type=model_name)
+                predictor.train_and_predict_batch(
+                    predictable_groups, PG_HOST, PG_PORT, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
+                )
     except ImportError as ie:
         print(f"Could not load predictor: {ie}")
     except Exception as e:
@@ -198,12 +199,16 @@ def main():
     # Extract raw numeric value
     df = df.withColumn("raw_numeric", expr("TRY_CAST(regexp_replace(result, '[^0-9.]', '') AS DOUBLE)"))
     
-    # Check if result starts with '<'
+    # Check if result starts with '<' or '>'
     df = df.withColumn("is_less_than", col("result").startswith("<"))
+    df = df.withColumn("is_greater_than", col("result").startswith(">"))
     
-    # Calculate processed numeric result by halving it if it started with '<'
+    # Calculate processed numeric result:
+    # - Halve it if it starts with '<' (standard practice for below detection limit)
+    # - Use raw value if it starts with '>' or has no prefix
     df = df.withColumn("numeric_result", 
                        when(col("is_less_than") & col("raw_numeric").isNotNull(), col("raw_numeric") / 2.0)
+                       .when(col("is_greater_than") & col("raw_numeric").isNotNull(), col("raw_numeric"))
                        .otherwise(col("raw_numeric")))
     
     # Parse timestamp
@@ -226,8 +231,8 @@ def main():
             count(col("numeric_result")).alias("num_samples")
         )
         
-    # Drop rows with null key attributes that would fail DB insert
-    windowed_df = windowed_df.dropna(subset=["samplingPoint_region", "sampleMaterialType", "determinand_prefLabel", "unit", "window"])
+    # Drop rows with null key attributes or null numeric results that would fail DB insert
+    windowed_df = windowed_df.dropna(subset=["samplingPoint_region", "sampleMaterialType", "determinand_prefLabel", "unit", "window", "avg_result"])
 
     query = windowed_df.writeStream \
         .outputMode("update") \

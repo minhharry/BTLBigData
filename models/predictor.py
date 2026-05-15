@@ -3,15 +3,24 @@ from psycopg2.extras import execute_values
 from datetime import timedelta
 import numpy as np
 
-# We import sklearn inside the method to ensure it's available or we can import it at the top
-try:
-    from sklearn.linear_model import LinearRegression
-except ImportError:
-    pass # Will handle missing module below if needed
-
 class WaterQualityPredictor:
     def __init__(self, model_type="LinearRegression"):
         self.model_type = model_type
+        
+        if self.model_type == "LinearRegression":
+            from models.linear_regression import LinearRegressionModel
+            self.model_instance = LinearRegressionModel()
+        elif self.model_type == "XGBoost":
+            from models.xgboost_model import XGBoostModel
+            self.model_instance = XGBoostModel()
+        elif self.model_type == "ARIMA":
+            from models.arima_model import ARIMAModel
+            self.model_instance = ARIMAModel()
+        elif self.model_type == "ETS":
+            from models.ets_model import ETSModel
+            self.model_instance = ETSModel()
+        else:
+            raise ValueError(f"Unknown model_type: {model_type}")
 
     def train_and_predict_batch(self, groups, host, port, db, user, password):
         conn = None
@@ -37,12 +46,24 @@ class WaterQualityPredictor:
                 processed_groups.add(group_key)
                 prediction_date = row.window_end # Time when prediction is made
                 
+                # Find the latest prediction date for this group and model to avoid redundant work
+                latest_pred_query = """
+                    SELECT MAX(prediction_date)
+                    FROM daily_predictions
+                    WHERE region=%s AND sample_material_type=%s 
+                      AND determinand_label=%s AND model_name=%s
+                """
+                cursor.execute(latest_pred_query, (region, material, determinand, self.model_type))
+                latest_pred_row = cursor.fetchone()
+                latest_pred_date = latest_pred_row[0] if latest_pred_row else None
+
                 # Fetch history for this group
                 query = """
                     SELECT window_start, avg_result 
                     FROM region_daily_averages 
                     WHERE region=%s AND sample_material_type=%s 
                       AND determinand_label=%s
+                      AND avg_result IS NOT NULL
                     ORDER BY window_start ASC
                 """
                 cursor.execute(query, (region, material, determinand))
@@ -52,8 +73,9 @@ class WaterQualityPredictor:
                 if len(history) < 2:
                     continue
                 
-                # Sliding window of up to 7 days, predicting the next 3 days
-                window_size = 7
+                # Window size is decided by the model
+                window_size = self.model_instance.window_size
+                
                 for i in range(1, len(history)):
                     # Extract the window ending at index i
                     start_idx = max(0, i - window_size + 1)
@@ -62,44 +84,26 @@ class WaterQualityPredictor:
                     if len(current_window) < 2:
                         continue
                         
-                    base_time = current_window[0][0]
+                    last_time = current_window[-1][0]
+                    window_prediction_date = last_time
                     
-                    X_train = []
-                    y_train = []
-                    for rec in current_window:
-                        day_index = (rec[0] - base_time).total_seconds() / 86400.0
-                        X_train.append([day_index])
-                        y_train.append(rec[1])
+                    # Skip if we already made predictions for this or a newer window end date
+                    if latest_pred_date and window_prediction_date <= latest_pred_date:
+                        continue
                     
-                    if self.model_type == "LinearRegression":
-                        try:
-                            # Train using scikit-learn
-                            model = LinearRegression()
-                            model.fit(X_train, y_train)
-                            
-                            # Predict next 3 days
-                            last_time = current_window[-1][0]
-                            # Use the last time in the window as the prediction_date
-                            window_prediction_date = last_time
-                            
-                            X_future = []
-                            future_dates = []
-                            for j in range(1, 4): # Next 1 to 3 days
-                                target_time = last_time + timedelta(days=j)
-                                target_index = (target_time - base_time).total_seconds() / 86400.0
-                                X_future.append([target_index])
-                                future_dates.append(target_time)
-                                
-                            preds = model.predict(X_future)
-                            
-                            for target_date, predicted_value in zip(future_dates, preds):
-                                predictions_to_insert.append((
-                                    region, material, determinand, unit,
-                                    self.model_type, window_prediction_date, target_date, float(predicted_value)
-                                ))
-                        except Exception as e:
-                            print(f"Failed to train/predict for {region} - {determinand} at {last_time}: {e}")
-                            continue
+                    try:
+                        # Delegate training and prediction to the specific model strategy
+                        preds = self.model_instance.train_and_predict(current_window)
+                        
+                        for target_date, predicted_value in preds:
+                            predictions_to_insert.append((
+                                region, material, determinand, unit,
+                                self.model_type, window_prediction_date, target_date, float(predicted_value)
+                            ))
+                    except Exception as e:
+                        # Fail gracefully if model fails to converge for a specific window
+                        print(f"Failed to train/predict for {region} - {determinand} at {last_time} with {self.model_type}: {e}")
+                        continue
                         
             if predictions_to_insert:
                 insert_query = """
@@ -114,7 +118,7 @@ class WaterQualityPredictor:
                 """
                 execute_values(cursor, insert_query, predictions_to_insert)
                 conn.commit()
-                print(f"Inserted {len(predictions_to_insert)} future predictions using sklearn.")
+                print(f"Inserted {len(predictions_to_insert)} future predictions using {self.model_type}.")
                 
             cursor.close()
         except Exception as e:

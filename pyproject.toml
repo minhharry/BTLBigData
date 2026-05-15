@@ -15,5 +15,7 @@ dependencies = [
     "pyspark>=4.1.1",
     "python-dotenv>=1.2.2",
     "scikit-learn>=1.8.0",
+    "statsmodels>=0.14.6",
     "streamlit>=1.57.0",
+    "xgboost>=3.2.0",
 ]

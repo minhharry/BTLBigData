@@ -10,7 +10,29 @@ BOOTSTRAP_SERVERS = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092').split
 TOPIC_NAME = 'water-quality-raw'
 CSV_FILE_PATH = 'data/observations-2026-4-3-sorted.csv'
 BATCH_SIZE = 1000  # Number of messages before flushing
-DELAY_SECONDS = 0.0  
+DELAY_SECONDS = 0.0
+CHECKPOINT_FILE = 'data/producer_checkpoint.txt'
+
+def get_checkpoint():
+    """Read the last sent message count from the checkpoint file."""
+    if os.path.exists(CHECKPOINT_FILE):
+        try:
+            with open(CHECKPOINT_FILE, 'r') as f:
+                content = f.read().strip()
+                return int(content) if content else 0
+        except (ValueError, IOError):
+            return 0
+    return 0
+
+def save_checkpoint(count):
+    """Save the current message count to the checkpoint file."""
+    try:
+        # Create directory if it doesn't exist
+        os.makedirs(os.path.dirname(CHECKPOINT_FILE), exist_ok=True)
+        with open(CHECKPOINT_FILE, 'w') as f:
+            f.write(str(count))
+    except IOError as e:
+        print(f"Warning: Could not save checkpoint: {e}")
 
 def create_producer():
     """Create a Kafka producer with automatic retry if brokers are not ready."""
@@ -37,12 +59,20 @@ def stream_csv_to_kafka():
     print(f"Starting ingestion: {CSV_FILE_PATH} -> Kafka Topic: {TOPIC_NAME}")
     
     start_time = time.time()
+    last_sent_count = get_checkpoint()
     count = 0
     
     try:
         with open(CSV_FILE_PATH, mode='r', encoding='utf-8') as f:
             # Using DictReader for easier mapping to JSON
             reader = csv.DictReader(f)
+            
+            if last_sent_count > 0:
+                print(f"Resuming from message {last_sent_count}...")
+                # Skip already sent rows
+                for _ in range(last_sent_count):
+                    next(reader, None)
+                count = last_sent_count
             
             for row in reader:
                 # Send the row as a dictionary (KafkaProducer value_serializer handles JSON)
@@ -51,8 +81,9 @@ def stream_csv_to_kafka():
                 count += 1
                 if count % BATCH_SIZE == 0:
                     producer.flush()
+                    save_checkpoint(count)
                     elapsed = time.time() - start_time
-                    rate = count / elapsed
+                    rate = count / elapsed if elapsed > 0 else 0
                     print(f"Sent {count} messages... Rate: {rate:.2f} msg/sec")
                 
                 # Small sleep to simulate real-time stream
@@ -65,6 +96,7 @@ def stream_csv_to_kafka():
         print(f"Error during ingestion: {e}")
     finally:
         producer.flush()
+        save_checkpoint(count)
         producer.close()
         print(f"Finished. Total messages sent: {count}")
 
