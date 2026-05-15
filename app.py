@@ -47,12 +47,39 @@ def fetch_data():
         st.error(f"Error connecting to the database: {e}")
         return pd.DataFrame()
 
+@st.cache_data(ttl=60)
+def fetch_predictions():
+    """Fetch prediction data."""
+    try:
+        conn = psycopg2.connect(
+            host=PG_HOST, port=PG_PORT, dbname=POSTGRES_DB,
+            user=POSTGRES_USER, password=POSTGRES_PASSWORD
+        )
+        query = """
+            SELECT region, sample_material_type, determinand_label, unit,
+                   model_name, prediction_date, target_date, predicted_value
+            FROM daily_predictions
+            ORDER BY target_date;
+        """
+        cursor = conn.cursor()
+        cursor.execute(query)
+        rows = cursor.fetchall()
+        columns = [desc[0] for desc in cursor.description]
+        df = pd.DataFrame(rows, columns=columns)
+        cursor.close()
+        conn.close()
+        return df
+    except Exception as e:
+        # Table might not exist yet
+        return pd.DataFrame()
+
 # Main app layout
 st.title("💧 Water Quality Daily Averages Dashboard")
 st.markdown("Visualize data produced by the `region_consumer.py` pipeline.")
 
 # Fetch data
 df = fetch_data()
+pred_df = fetch_predictions()
 
 if df.empty:
     st.warning("No data found in the database or failed to connect. Please ensure `region_consumer.py` is running and has populated the database.")
@@ -97,6 +124,12 @@ else:
                 
                 st.subheader(f"Results for {selected_determinand}")
                 
+                show_predictions = st.checkbox("Show Predictions", value=True)
+                available_models = pred_df['model_name'].unique().tolist() if not pred_df.empty else []
+                selected_model = None
+                if show_predictions and available_models:
+                    selected_model = st.selectbox("Prediction Model", available_models)
+                
                 # Plot
                 selected_regions_label = "Selected Regions" if len(selected_regions) > 1 else selected_regions[0]
                 
@@ -117,6 +150,33 @@ else:
                         'window_start': 'Date'
                     }
                 )
+                
+                if show_predictions and selected_model and not pred_df.empty:
+                    model_preds = pred_df[
+                        (pred_df['region'].isin(selected_regions)) &
+                        (pred_df['sample_material_type'] == selected_material) &
+                        (pred_df['determinand_label'] == selected_determinand) &
+                        (pred_df['model_name'] == selected_model)
+                    ]
+                    if not model_preds.empty:
+                        # Ensure target_date is datetime
+                        model_preds['target_date'] = pd.to_datetime(model_preds['target_date'])
+                        
+                        # Since there might be multiple predictions for the same target_date,
+                        # let's get the latest prediction for each target_date per region
+                        latest_preds = model_preds.sort_values('prediction_date', ascending=False).groupby(['region', 'target_date']).first().reset_index()
+                        
+                        for region in selected_regions:
+                            region_preds = latest_preds[latest_preds['region'] == region]
+                            if not region_preds.empty:
+                                fig.add_scatter(
+                                    x=region_preds['target_date'],
+                                    y=region_preds['predicted_value'],
+                                    mode='lines+markers',
+                                    name=f'{region} ({selected_model} Pred)',
+                                    line=dict(dash='dash'),
+                                )
+
                 st.plotly_chart(fig, width="stretch")
                 
                 # Data table

@@ -50,10 +50,24 @@ def init_db():
                 std_result DOUBLE PRECISION,
                 num_samples INTEGER,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (region, sample_material_type, determinand_label, unit, window_start)
+                PRIMARY KEY (region, sample_material_type, determinand_label, window_start)
+            );
+        """
+        create_predictions_table_query = """
+            CREATE TABLE IF NOT EXISTS daily_predictions (
+                region VARCHAR(255),
+                sample_material_type VARCHAR(255),
+                determinand_label VARCHAR(255),
+                unit VARCHAR(255),
+                model_name VARCHAR(255),
+                prediction_date TIMESTAMP,
+                target_date TIMESTAMP,
+                predicted_value DOUBLE PRECISION,
+                PRIMARY KEY (region, sample_material_type, determinand_label, model_name, prediction_date, target_date)
             );
         """
         cursor.execute(create_table_query)
+        cursor.execute(create_predictions_table_query)
         conn.commit()
         cursor.close()
         print("PostgreSQL table initialized successfully.")
@@ -101,8 +115,9 @@ def process_batch(df, epoch_id):
             region, sample_material_type, determinand_label, unit,
             window_start, window_end, avg_result, std_result, num_samples
         ) VALUES %s
-        ON CONFLICT (region, sample_material_type, determinand_label, unit, window_start) 
+        ON CONFLICT (region, sample_material_type, determinand_label, window_start) 
         DO UPDATE SET 
+            unit = EXCLUDED.unit,
             window_end = EXCLUDED.window_end,
             avg_result = EXCLUDED.avg_result,
             std_result = EXCLUDED.std_result,
@@ -126,6 +141,22 @@ def process_batch(df, epoch_id):
         if conn is not None:
             conn.close()
     print("Upserted batch")
+    
+    # Run predictions for groups that have num_samples >= 10 in this batch
+    try:
+        from models.predictor import WaterQualityPredictor
+        predictor = WaterQualityPredictor()
+        
+        predictable_groups = [row for row in rows if row.num_samples >= 10]
+        
+        if predictable_groups:
+            predictor.train_and_predict_batch(
+                predictable_groups, PG_HOST, PG_PORT, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
+            )
+    except ImportError as ie:
+        print(f"Could not load predictor: {ie}")
+    except Exception as e:
+        print(f"Error during prediction phase: {e}")
 
 def main():
     init_db()
