@@ -1,93 +1,106 @@
 # UK Water Quality Real-Time Monitoring & Prediction Pipeline
 
-This project is a big data pipeline that processes UK water quality observation data in real-time. It streams data via Apache Kafka, performs stateful aggregation using PySpark Structured Streaming, executes time-series forecasting using multiple machine learning models, and visualizes the results through an interactive Streamlit dashboard.
+This project is a high-performance big data pipeline designed to process and analyze UK water quality observation data in real-time. It leverages a modern data stack to ingest, process, predict, and visualize water quality trends across England.
 
-## Architecture
+## 🚀 System Architecture
 
-1.  **Data Ingestion (`producer.py`)**: Simulates real-time data flow by reading historical water quality observations from a CSV file (`data/observations-2026-4-3-sorted.csv`) and publishing them as JSON messages to the `water-quality-raw` Kafka topic.
-2.  **Message Broker (Apache Kafka)**: Managed via Docker Compose. Handles the high-throughput stream of raw observation data.
-3.  **Stream Processing & ML (`region_consumer.py`)**: A PySpark Structured Streaming application that:
-    *   Subscribes to the `water-quality-raw` Kafka topic.
-    *   Parses and cleans the JSON payload, handling numeric conversions (including detection limit cases like `<0.1`).
-    *   Performs windowed aggregations (Daily) grouped by **Region**, **Sample Material Type**, and **Determinand**.
-    *   Calculates statistical metrics: Average, Standard Deviation, and Sample Count.
-    *   **Forecasting Phase**: For groups with sufficient data, it triggers a prediction pipeline using `LinearRegression`, `XGBoost`, `ARIMA`, and `ETS` models to forecast future water quality levels.
-4.  **Data Storage (PostgreSQL)**: Stores aggregated daily averages and future predictions in separate tables (`region_daily_averages` and `daily_predictions`).
-5.  **Visualization (`app.py`)**: A Streamlit dashboard that allows users to explore regional water quality trends and compare actual data with model predictions.
+The pipeline consists of five main stages:
 
-## Prerequisites
+1.  **Data Ingestion (`producer.py`)**: Simulates a real-time stream by reading historical observations from CSV and publishing JSON messages to the `water-quality-raw` Kafka topic.
+2.  **Message Broker (Apache Kafka)**: Acts as the high-throughput backbone, managed via Docker Compose, handling the stream of raw observation data.
+3.  **Real-Time Processing (PySpark Structured Streaming)**:
+    *   **Regional Consumer (`region_consumer.py`)**: Performs daily aggregations by Region. It calculates statistical metrics and triggers a **Forecasting Pipeline** (Linear Regression, XGBoost, ARIMA, ETS). It also calculates **GQA (General Quality Assessment)** grades based on Dissolved Oxygen, BOD, and Ammonia.
+    *   **Station Consumer (`station_consumer.py`)**: Performs granular daily aggregations by Station. It executes **Cross-Sectional Anomaly Detection** using Z-scores to identify outliers in real-time.
+4.  **Persistent Storage (PostgreSQL)**: A relational database storing aggregated stats, GQA grades, detected anomalies, and future predictions.
+5.  **Interactive Dashboard (`app.py`)**: A Streamlit application providing four distinct views:
+    *   **Historical Trends**: Visualize regional levels with integrated AI predictions and performance metrics.
+    *   **Anomaly Detection Map**: Geographic visualization of Z-score based anomalies.
+    *   **Regional GQA Map**: Map-based assessment of river quality grades (A-F).
+    *   **Model Performance**: Comparative analysis of AI models against a Persistence Baseline.
 
-*   **Docker & Docker Compose**: To run Kafka, PostgreSQL, Kafka-UI, and pgAdmin.
+## 🛠️ Prerequisites
+
+*   **Windows 11** (Optimized environment)
+*   **Docker & Docker Compose**: For Kafka, PostgreSQL, and monitoring UIs.
 *   **Python >= 3.11**
-*   **uv**: Fast Python package manager (required for dependency management).
-*   **Java (JRE/JDK)**: Required for PySpark.
+*   **uv**: Fast Python package manager (required for environment management).
+*   **Java (JRE/JDK)**: Required for PySpark execution.
 
-## Setup Instructions
+## ⚙️ Setup Instructions
 
 1.  **Configure Environment**
-    Copy the example environment file and adjust the variables if necessary:
+    Copy the example environment file:
     ```powershell
     cp .env.example .env
     ```
 
 2.  **Install Dependencies**
-    Use `uv` to create a virtual environment and install all required packages:
+    Use `uv` to sync the environment:
     ```powershell
     uv sync
     ```
 
 3.  **Start Infrastructure**
-    Launch the required services using Docker Compose:
+    Launch the core services:
     ```powershell
     docker-compose up -d
     ```
-    This starts:
-    *   **Kafka**: `localhost:9092`
-    *   **Kafka-UI**: `http://localhost:8080` (Monitor topics and messages)
-    *   **PostgreSQL**: `localhost:5432`
-    *   **pgAdmin**: `http://localhost:5050` (Database management)
+    *   **Kafka-UI**: `http://localhost:8080`
+    *   **pgAdmin**: `http://localhost:5050` (DB: `app_database`, User: `admin`)
 
-4.  **Initialize/Clear Data (Optional)**
-    If you need to reset the database before starting:
+4.  **Initialize Database**
+    (Optional) Clear existing data:
     ```powershell
     .venv\Scripts\activate
     python clear_data.py
     ```
 
-## Running the Pipeline
+## 🏃 Running the Pipeline
 
-Ensure your virtual environment is active in every terminal: `.venv\Scripts\activate`.
+Open four separate terminals and activate the environment: `.venv\Scripts\activate`.
 
 ### 1. Start the Data Producer
-Publishes raw observations to Kafka:
 ```powershell
 python producer.py
 ```
 
-### 2. Start the Stream Processor (Consumer)
-Processes the stream, calculates daily stats, and generates predictions:
+### 2. Start the Regional Stream Processor
+Handles regional stats, GQA, and AI Predictions:
 ```powershell
 python region_consumer.py
 ```
-*Note: This process requires PySpark. Ensure Java is installed and `SPARK_HOME` or path is configured if necessary, though the script handles local execution.*
 
-### 3. Launch the Dashboard
-Visualize the processed data and predictions:
+### 3. Start the Station Stream Processor
+Handles station-level stats and Anomaly Detection:
+```powershell
+python station_consumer.py
+```
+
+### 4. Launch the Dashboard
 ```powershell
 streamlit run app.py
 ```
 
-## Additional Tools
+## 📊 Feature Highlights
 
-*   **`analyze_data.py`**: A standalone script for batch analysis of the raw CSV dataset to understand the distribution of regions, materials, and determinands.
-*   **`models/`**: Contains the `WaterQualityPredictor` logic used by the consumer for forecasting.
+*   **AI Forecasting**: Uses a hybrid approach with `LinearRegression`, `XGBoost`, `ARIMA`, and `ETS` to predict future water quality.
+*   **Performance Benchmarking**: Every model is evaluated using MSE, RMSE, and R² against a Persistence Baseline to ensure predictive value.
+*   **Real-time GQA Grades**: Automatically classifies water quality from Grade A (Very Good) to Grade F (Bad) using standard environmental metrics.
+*   **Spatiotemporal Anomalies**: Detects outliers by comparing station performance against its peers in the same region and time window.
 
-## Monitoring & Access
+## 📂 Project Structure
 
-*   **Kafka-UI**: `http://localhost:8080`
-*   **Streamlit App**: `http://localhost:8501` (by default)
-*   **pgAdmin**: `http://localhost:5050`
-    *   **Host**: `db` (inside docker)
+*   `models/`: Core prediction logic and model implementations.
+*   `static/`: CSS and styling for the dashboard.
+*   `db_manager.py`: Centralized database access layer.
+*   `analyze_data.py`: Tool for initial CSV dataset exploration.
+
+## 🖥️ Monitoring & Access
+
+*   **Kafka-UI**: [http://localhost:8080](http://localhost:8080) (Monitor Kafka topics and messages)
+*   **Streamlit App**: [http://localhost:8501](http://localhost:8501) (Visualization Dashboard)
+*   **pgAdmin**: [http://localhost:5050](http://localhost:5050) (Database management)
+    *   **Host**: `db` (when connecting from inside Docker) or `localhost` (from host)
     *   **Maintenance DB**: `app_database`
     *   **Username**: `admin`
-    *   **Password**: See `.env` file
+    *   **Password**: Refer to your `.env` file
