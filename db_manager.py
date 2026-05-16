@@ -189,6 +189,137 @@ class DatabaseManager:
             "materials": materials
         }
 
+    def get_model_performance_metrics(self, regions, material, determinand, model_name):
+        """Fetch joined actual and predicted data to calculate performance metrics (MSE, RMSE, R2)."""
+        if not regions or not material or not determinand or not model_name:
+            return None
+        
+        query = """
+            WITH latest_predictions AS (
+                SELECT DISTINCT ON (region, sample_material_type, determinand_label, model_name, target_date)
+                    region, sample_material_type, determinand_label, model_name, target_date, predicted_value
+                FROM daily_predictions
+                ORDER BY region, sample_material_type, determinand_label, model_name, target_date, prediction_date DESC
+            )
+            SELECT p.target_date, p.predicted_value, a.avg_result as actual_value
+            FROM latest_predictions p
+            JOIN region_daily_averages a ON 
+                p.region = a.region AND 
+                p.sample_material_type = a.sample_material_type AND 
+                p.determinand_label = a.determinand_label AND 
+                p.target_date = a.window_start
+            WHERE p.region IN %s 
+              AND p.sample_material_type = %s 
+              AND p.determinand_label = %s
+              AND p.model_name = %s
+            ORDER BY p.target_date;
+        """
+        df = self._fetch_as_df(query, (tuple(regions), material, determinand, model_name))
+        
+        if df.empty or len(df) < 2:
+            return None
+            
+        from sklearn.metrics import mean_squared_error, r2_score
+        import numpy as np
+        
+        # Ensure we have numeric types
+        actuals = df['actual_value'].astype(float)
+        preds = df['predicted_value'].astype(float)
+        
+        mse = mean_squared_error(actuals, preds)
+        rmse = np.sqrt(mse)
+        r2 = r2_score(actuals, preds)
+        
+        return {
+            "mse": mse,
+            "rmse": rmse,
+            "r2": r2,
+            "count": len(df)
+        }
+
+    def get_overall_model_performance(self):
+        """Fetch overall performance metrics for all models and a persistence baseline."""
+        # 1. Fetch AI Model Metrics (using latest prediction for each target date)
+        query = """
+            WITH latest_predictions AS (
+                SELECT DISTINCT ON (model_name, region, sample_material_type, determinand_label, target_date)
+                    model_name, region, sample_material_type, determinand_label, target_date, predicted_value
+                FROM daily_predictions
+                ORDER BY model_name, region, sample_material_type, determinand_label, target_date, prediction_date DESC
+            )
+            SELECT p.model_name, p.predicted_value, a.avg_result as actual_value
+            FROM latest_predictions p
+            JOIN region_daily_averages a ON 
+                p.region = a.region AND 
+                p.sample_material_type = a.sample_material_type AND 
+                p.determinand_label = a.determinand_label AND 
+                p.target_date = a.window_start;
+        """
+        df = self._fetch_as_df(query)
+        
+        # 2. Fetch Persistence Baseline Data (Fair comparison: Most Recent available value)
+        baseline_query = """
+            WITH ai_scope AS (
+                SELECT DISTINCT region, sample_material_type, determinand_label, target_date
+                FROM daily_predictions
+            )
+            SELECT p.avg_result as predicted_value, a2.avg_result as actual_value
+            FROM ai_scope s
+            JOIN region_daily_averages a2 ON 
+                s.region = a2.region AND 
+                s.sample_material_type = a2.sample_material_type AND 
+                s.determinand_label = a2.determinand_label AND 
+                s.target_date = a2.window_start
+            LEFT JOIN LATERAL (
+                SELECT avg_result
+                FROM region_daily_averages
+                WHERE region = s.region 
+                  AND sample_material_type = s.sample_material_type 
+                  AND determinand_label = s.determinand_label
+                  AND window_start < s.target_date
+                ORDER BY window_start DESC
+                LIMIT 1
+            ) p ON TRUE
+            WHERE p.avg_result IS NOT NULL;
+        """
+        baseline_df = self._fetch_as_df(baseline_query)
+        
+        from sklearn.metrics import mean_squared_error, r2_score
+        import numpy as np
+        
+        results = []
+        
+        # Calculate for AI models
+        if not df.empty:
+            for model in df['model_name'].unique():
+                m_df = df[df['model_name'] == model]
+                if len(m_df) >= 2:
+                    actuals = m_df['actual_value'].astype(float)
+                    preds = m_df['predicted_value'].astype(float)
+                    mse = mean_squared_error(actuals, preds)
+                    results.append({
+                        "Model": model,
+                        "MSE": mse,
+                        "RMSE": np.sqrt(mse),
+                        "R2 Score": r2_score(actuals, preds),
+                        "Samples": len(m_df)
+                    })
+        
+        # Calculate for Baseline
+        if not baseline_df.empty and len(baseline_df) >= 2:
+            actuals = baseline_df['actual_value'].astype(float)
+            preds = baseline_df['predicted_value'].astype(float)
+            mse = mean_squared_error(actuals, preds)
+            results.append({
+                "Model": "Baseline (Persistence)",
+                "MSE": mse,
+                "RMSE": np.sqrt(mse),
+                "R2 Score": r2_score(actuals, preds),
+                "Samples": len(baseline_df)
+            })
+            
+        return pd.DataFrame(results).sort_values("MSE") if results else pd.DataFrame()
+
     def _fetch_as_df(self, query, params=None):
         conn = None
         try:

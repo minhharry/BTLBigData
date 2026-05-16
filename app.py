@@ -48,7 +48,7 @@ def get_gqa(start_date, end_date, material):
 st.title("Water Quality Monitoring Dashboard")
 st.markdown("Real-time analysis and anomaly detection for water quality across England.")
 
-tab1, tab2, tab3 = st.tabs(["Historical Trends", "Anomaly Detection Map", "Regional GQA Map"])
+tab1, tab2, tab3, tab4 = st.tabs(["Historical Trends", "Anomaly Detection Map", "Regional GQA Map", "Model Performance Comparison"])
 
 # --- Tab 1: Historical Trends ---
 with tab1:
@@ -111,6 +111,16 @@ with tab1:
                         if show_predictions and selected_model:
                             pred_df = get_predictions(selected_regions, selected_material, selected_determinand, selected_model)
                             if not pred_df.empty:
+                                # Calculate metrics
+                                metrics = db.get_model_performance_metrics(selected_regions, selected_material, selected_determinand, selected_model)
+                                if metrics:
+                                    st.subheader(f"Model Performance: {selected_model}")
+                                    m_col1, m_col2, m_col3, m_col4 = st.columns(4)
+                                    m_col1.metric("MSE", f"{metrics['mse']:.4f}")
+                                    m_col2.metric("RMSE", f"{metrics['rmse']:.4f}")
+                                    m_col3.metric("R² Score", f"{metrics['r2']:.4f}")
+                                    m_col4.metric("Samples", metrics['count'])
+
                                 pred_df['target_date'] = pd.to_datetime(pred_df['target_date'])
                                 latest_preds = pred_df.sort_values('prediction_date', ascending=False).groupby(['region', 'target_date']).first().reset_index()
                                 
@@ -125,7 +135,7 @@ with tab1:
                                             line=dict(dash='dash'),
                                         )
 
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, width='stretch')
                         
                         with st.expander("View Raw Data"):
                             st.dataframe(final_df.sort_values('window_start', ascending=False))
@@ -162,7 +172,7 @@ with tab2:
         if anomaly_df.empty:
             st.warning("No anomalies found for the selected filters.")
         else:
-            fig_map = px.scatter_mapbox(
+            fig_map = px.scatter_map(
                 anomaly_df, lat="latitude", lon="longitude", color="z_score",
                 size=anomaly_df["z_score"].abs(),
                 color_continuous_scale=px.colors.diverging.RdBu_r,
@@ -171,8 +181,8 @@ with tab2:
                 zoom=5.5, center={"lat": 52.8, "lon": -1.5}, height=700,
                 title=f"Anomalies from {start_date} to {end_date}"
             )
-            fig_map.update_layout(mapbox_style="carto-positron")
-            st.plotly_chart(fig_map, use_container_width=True)
+            fig_map.update_layout(map_style="carto-positron")
+            st.plotly_chart(fig_map, width='stretch')
             st.subheader("Anomaly Details")
             st.dataframe(anomaly_df.sort_values("z_score", ascending=False))
 
@@ -207,18 +217,60 @@ with tab3:
             gqa_df = gqa_df.sort_values("gqa_grade")
             color_map = {'A': '#2ecc71', 'B': '#27ae60', 'C': '#f1c40f', 'D': '#e67e22', 'E': '#e74c3c', 'F': '#95a5a6'}
             
-            fig_gqa = px.scatter_mapbox(
+            fig_gqa = px.scatter_map(
                 gqa_df, lat="latitude", lon="longitude", color="gqa_grade",
                 color_discrete_map=color_map, category_orders={"gqa_grade": ["A", "B", "C", "D", "E", "F"]},
                 zoom=5.5, center={"lat": 52.8, "lon": -1.5}, hover_name="region",
                 hover_data={"window_start": True, "gqa_grade": True, "do_value": ":.2f", "bod_value": ":.2f", "ammonia_value": ":.2f"},
                 height=700, title=f"Regional GQA Grades from {start_date_gqa} to {end_date_gqa}"
             )
-            fig_gqa.update_layout(mapbox_style="carto-positron")
+            fig_gqa.update_layout(map_style="carto-positron")
             fig_gqa.update_traces(marker=dict(size=20))
-            st.plotly_chart(fig_gqa, use_container_width=True)
+            st.plotly_chart(fig_gqa, width='stretch')
             st.subheader("Regional GQA Details")
             st.dataframe(gqa_df)
+
+# --- Tab 4: Model Performance Comparison ---
+with tab4:
+    st.header("Overall Model Performance Comparison")
+    st.markdown("""
+        Compare the predictive accuracy of all AI models against each other and a **Persistence Baseline** 
+        (which simply predicts that tomorrow's value will be the same as today's).
+    """)
+    
+    perf_df = db.get_overall_model_performance()
+    
+    if perf_df.empty:
+        st.info("Insufficient data to calculate overall performance metrics yet.")
+    else:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("Performance Metrics Summary")
+            st.dataframe(perf_df.style.highlight_min(subset=['MSE', 'RMSE'], color='lightgreen')
+                                    .highlight_max(subset=['R2 Score'], color='lightgreen'), 
+                         width='stretch')
+            
+        with col2:
+            st.subheader("MSE Comparison (Lower is better)")
+            fig_mse = px.bar(perf_df, x='Model', y='MSE', color='Model', 
+                             title="Mean Squared Error by Model")
+            st.plotly_chart(fig_mse, width='stretch')
+            
+        st.divider()
+        
+        col3, col4 = st.columns(2)
+        with col3:
+            st.subheader("R² Score Comparison (Higher is better)")
+            fig_r2 = px.bar(perf_df, x='Model', y='R2 Score', color='Model', 
+                            title="R² Score by Model")
+            st.plotly_chart(fig_r2, width='stretch')
+            
+        with col4:
+            st.subheader("Evaluation Coverage")
+            fig_samples = px.pie(perf_df, names='Model', values='Samples', 
+                                 title="Data Points used for Evaluation")
+            st.plotly_chart(fig_samples, width='stretch')
 
 st.markdown("---")
 st.caption("Data is cached for 60 seconds.")
