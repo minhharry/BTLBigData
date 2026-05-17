@@ -437,15 +437,16 @@ class DatabaseManager:
                     
                     mse = mean_squared_error(actuals, preds)
                     rmse = np.sqrt(mse)
-                    r2 = r2_score(actuals, preds)
                     
-                    std = actuals.std()
-                    if std > 1e-8:
+                    std = actuals.std(ddof=0)
+                    if std > 1e-4:
                         nmse = mse / (std ** 2)
                         nrmse = rmse / std
+                        r2 = r2_score(actuals, preds)
                     else:
                         nmse = 0.0
                         nrmse = 0.0
+                        r2 = 0.0
                     
                     det_results.append({
                         "nmse": nmse,
