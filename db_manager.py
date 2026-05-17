@@ -104,9 +104,19 @@ class DatabaseManager:
         return df['model_name'].tolist() if not df.empty else []
 
     def get_anomalies(self, start_date=None, end_date=None, material="All", determinand="All"):
-        """Fetch anomalies with filters."""
+        """Fetch anomalies with filters, only including stations with enough history."""
         filters = []
         params = []
+        
+        # Filter for station-material-determinand triples with at least 3 records in station_daily_averages
+        filters.append("""
+            (station_id, sample_material_type, determinand_label) IN (
+                SELECT station_id, sample_material_type, determinand_label
+                FROM station_daily_averages 
+                GROUP BY station_id, sample_material_type, determinand_label
+                HAVING COUNT(*) >= 3
+            )
+        """)
         
         if start_date:
             filters.append("window_start::date >= %s")
@@ -131,6 +141,28 @@ class DatabaseManager:
             ORDER BY window_start DESC;
         """
         return self._fetch_as_df(query, tuple(params) if params else None)
+
+    def get_station_history(self, station_id, material, determinand):
+        """Fetch daily averages and anomaly status for a specific station."""
+        if not station_id or not material or not determinand:
+            return pd.DataFrame()
+        
+        query = """
+            SELECT s.window_start, s.avg_result, s.unit, 
+                   COALESCE(a.is_anomaly, FALSE) as is_anomaly,
+                   a.z_score
+            FROM station_daily_averages s
+            LEFT JOIN station_anomalies a ON 
+                s.station_id = a.station_id AND 
+                s.sample_material_type = a.sample_material_type AND 
+                s.determinand_label = a.determinand_label AND 
+                s.window_start = a.window_start
+            WHERE s.station_id = %s 
+              AND s.sample_material_type = %s 
+              AND s.determinand_label = %s
+            ORDER BY s.window_start;
+        """
+        return self._fetch_as_df(query, (station_id, material, determinand))
 
     def get_anomaly_metadata(self):
         """Fetch metadata for anomaly filters (dates, materials, determinands)."""
@@ -319,6 +351,87 @@ class DatabaseManager:
             })
             
         return pd.DataFrame(results).sort_values("MSE") if results else pd.DataFrame()
+
+    def get_predictable_groups_overall_stats(self):
+        """Fetch overall stats for predictable groups vs all groups."""
+        query = """
+            SELECT 
+                COUNT(*) as total_records,
+                SUM(CASE WHEN num_samples >= 10 THEN 1 ELSE 0 END) as predictable_records,
+                ROUND(100.0 * SUM(CASE WHEN num_samples >= 10 THEN 1 ELSE 0 END) / COUNT(*), 2) as eligibility_rate
+            FROM region_daily_averages;
+        """
+        return self._fetch_as_df(query)
+
+    def get_predictable_groups_regional_stats(self):
+        """Fetch total and predictable records per region, ordered by predictable count."""
+        query = """
+            SELECT 
+                region,
+                COUNT(*) as total_records,
+                SUM(CASE WHEN num_samples >= 10 THEN 1 ELSE 0 END) as predictable_records,
+                ROUND(100.0 * SUM(CASE WHEN num_samples >= 10 THEN 1 ELSE 0 END) / COUNT(*), 2) as eligibility_rate
+            FROM region_daily_averages
+            GROUP BY region
+            ORDER BY predictable_records DESC;
+        """
+        return self._fetch_as_df(query)
+
+    def get_predictable_groups_material_stats(self):
+        """Fetch total and predictable records per sample material type."""
+        query = """
+            SELECT 
+                sample_material_type,
+                COUNT(*) as total_records,
+                SUM(CASE WHEN num_samples >= 10 THEN 1 ELSE 0 END) as predictable_records,
+                ROUND(100.0 * SUM(CASE WHEN num_samples >= 10 THEN 1 ELSE 0 END) / COUNT(*), 2) as eligibility_rate
+            FROM region_daily_averages
+            GROUP BY sample_material_type
+            ORDER BY predictable_records DESC;
+        """
+        return self._fetch_as_df(query)
+
+    def get_predictable_groups_determinand_stats(self):
+        """Fetch total and predictable records for the top 15 determinand labels."""
+        query = """
+            SELECT 
+                determinand_label,
+                COUNT(*) as total_records,
+                SUM(CASE WHEN num_samples >= 10 THEN 1 ELSE 0 END) as predictable_records,
+                ROUND(100.0 * SUM(CASE WHEN num_samples >= 10 THEN 1 ELSE 0 END) / COUNT(*), 2) as eligibility_rate
+            FROM region_daily_averages
+            GROUP BY determinand_label
+            ORDER BY predictable_records DESC
+            LIMIT 15;
+        """
+        return self._fetch_as_df(query)
+
+    def get_predictable_groups_sample_distribution(self):
+        """Fetch bucketed sample counts for sample size distribution analysis."""
+        query = """
+            SELECT 
+                CASE 
+                    WHEN num_samples = 1 THEN '1'
+                    WHEN num_samples BETWEEN 2 AND 4 THEN '2-4'
+                    WHEN num_samples BETWEEN 5 AND 9 THEN '5-9'
+                    WHEN num_samples BETWEEN 10 AND 19 THEN '10-19'
+                    WHEN num_samples BETWEEN 20 AND 49 THEN '20-49'
+                    ELSE '50+'
+                END as sample_bucket,
+                COUNT(*) as group_count
+            FROM region_daily_averages
+            GROUP BY sample_bucket
+            ORDER BY 
+                CASE 
+                    WHEN MIN(num_samples) = 1 THEN 1
+                    WHEN MIN(num_samples) = 2 THEN 2
+                    WHEN MIN(num_samples) = 5 THEN 3
+                    WHEN MIN(num_samples) = 10 THEN 4
+                    WHEN MIN(num_samples) = 20 THEN 5
+                    ELSE 6
+                END;
+        """
+        return self._fetch_as_df(query)
 
     def _fetch_as_df(self, query, params=None):
         conn = None

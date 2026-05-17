@@ -13,7 +13,7 @@ from kafka.errors import NoBrokersAvailable
 BOOTSTRAP_SERVERS = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092').split(',')
 TOPIC_NAME = 'water-quality-raw'
 CSV_FILE_PATH = 'data/observations-2026-4-3-sorted.csv'
-BATCH_SIZE = 1000
+BATCH_SIZE = 20000
 DELAY_SECONDS = 0.0
 CHECKPOINT_FILE = 'data/producer_checkpoint.txt'
 

@@ -19,7 +19,7 @@ class ETSModel:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             try:
-                model = ExponentialSmoothing(y_train, trend='add', seasonal=None, initialization_method="estimated")
+                model = ExponentialSmoothing(y_train, trend=None, seasonal=None, initialization_method="estimated")
                 res = model.fit()
                 preds = res.forecast(3)
                 return list(zip(future_dates, preds))
