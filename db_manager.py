@@ -266,6 +266,10 @@ class DatabaseManager:
                 SELECT DISTINCT ON (region, sample_material_type, determinand_label, model_name, target_date)
                     region, sample_material_type, determinand_label, model_name, target_date, predicted_value
                 FROM daily_predictions
+                WHERE region IN %s 
+                  AND sample_material_type = %s 
+                  AND determinand_label = %s
+                  AND model_name = %s
                 ORDER BY region, sample_material_type, determinand_label, model_name, target_date, prediction_date DESC
             )
             SELECT p.target_date, p.predicted_value, a.avg_result as actual_value
@@ -275,10 +279,6 @@ class DatabaseManager:
                 p.sample_material_type = a.sample_material_type AND 
                 p.determinand_label = a.determinand_label AND 
                 p.target_date = a.window_start
-            WHERE p.region IN %s 
-              AND p.sample_material_type = %s 
-              AND p.determinand_label = %s
-              AND p.model_name = %s
             ORDER BY p.target_date;
         """
         df = self._fetch_as_df(query, (tuple(regions), material, determinand, model_name))
@@ -349,25 +349,26 @@ class DatabaseManager:
 
     def get_overall_model_performance(self, regions=None, material="All", determinand="All"):
         """Fetch overall performance metrics for all models and a persistence baseline with filters."""
-        filters = []
-        params = []
+        cte_filters = []
+        cte_params = []
         if regions:
-            filters.append("p.region IN %s")
-            params.append(tuple(regions))
+            cte_filters.append("region IN %s")
+            cte_params.append(tuple(regions))
         if material != "All":
-            filters.append("p.sample_material_type = %s")
-            params.append(material)
+            cte_filters.append("sample_material_type = %s")
+            cte_params.append(material)
         if determinand != "All":
-            filters.append("p.determinand_label = %s")
-            params.append(determinand)
+            cte_filters.append("determinand_label = %s")
+            cte_params.append(determinand)
             
-        where_clause = "WHERE " + " AND ".join(filters) if filters else ""
+        cte_where = "WHERE " + " AND ".join(cte_filters) if cte_filters else ""
         
         query = f"""
             WITH latest_predictions AS (
                 SELECT DISTINCT ON (model_name, region, sample_material_type, determinand_label, target_date)
                     model_name, region, sample_material_type, determinand_label, target_date, predicted_value
                 FROM daily_predictions
+                {cte_where}
                 ORDER BY model_name, region, sample_material_type, determinand_label, target_date, prediction_date DESC
             )
             SELECT p.model_name, p.determinand_label, p.predicted_value, a.avg_result as actual_value
@@ -376,29 +377,29 @@ class DatabaseManager:
                 p.region = a.region AND 
                 p.sample_material_type = a.sample_material_type AND 
                 p.determinand_label = a.determinand_label AND 
-                p.target_date = a.window_start
-            {where_clause};
+                p.target_date = a.window_start;
         """
-        df = self._fetch_as_df(query, tuple(params) if params else None)
+        df = self._fetch_as_df(query, tuple(cte_params) if cte_params else None)
         
-        baseline_filters = []
-        baseline_params = []
+        scope_filters = []
+        scope_params = []
         if regions:
-            baseline_filters.append("s.region IN %s")
-            baseline_params.append(tuple(regions))
+            scope_filters.append("region IN %s")
+            scope_params.append(tuple(regions))
         if material != "All":
-            baseline_filters.append("s.sample_material_type = %s")
-            baseline_params.append(material)
+            scope_filters.append("sample_material_type = %s")
+            scope_params.append(material)
         if determinand != "All":
-            baseline_filters.append("s.determinand_label = %s")
-            baseline_params.append(determinand)
+            scope_filters.append("determinand_label = %s")
+            scope_params.append(determinand)
             
-        baseline_where = "AND " + " AND ".join(baseline_filters) if baseline_filters else ""
+        scope_where = "WHERE " + " AND ".join(scope_filters) if scope_filters else ""
         
         baseline_query = f"""
             WITH ai_scope AS (
                 SELECT DISTINCT region, sample_material_type, determinand_label, target_date
                 FROM daily_predictions
+                {scope_where}
             )
             SELECT s.determinand_label, p.avg_result as predicted_value, a2.avg_result as actual_value
             FROM ai_scope s
@@ -417,9 +418,9 @@ class DatabaseManager:
                 ORDER BY window_start DESC
                 LIMIT 1
             ) p ON TRUE
-            WHERE p.avg_result IS NOT NULL {baseline_where};
+            WHERE p.avg_result IS NOT NULL;
         """
-        baseline_df = self._fetch_as_df(baseline_query, tuple(baseline_params) if baseline_params else None)
+        baseline_df = self._fetch_as_df(baseline_query, tuple(scope_params) if scope_params else None)
         
         from sklearn.metrics import mean_squared_error, r2_score
         import numpy as np

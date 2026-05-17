@@ -91,9 +91,19 @@ def init_db():
                 PRIMARY KEY (region, sample_material_type, window_start)
             );
         """
+        create_index_perf_query = """
+            CREATE INDEX IF NOT EXISTS idx_daily_predictions_model_performance 
+            ON daily_predictions (model_name, region, sample_material_type, determinand_label, target_date, prediction_date DESC);
+        """
+        create_index_scope_query = """
+            CREATE INDEX IF NOT EXISTS idx_daily_predictions_scope 
+            ON daily_predictions (region, sample_material_type, determinand_label, target_date);
+        """
         cursor.execute(create_table_query)
         cursor.execute(create_predictions_table_query)
         cursor.execute(create_gqa_table_query)
+        cursor.execute(create_index_perf_query)
+        cursor.execute(create_index_scope_query)
         conn.commit()
         cursor.close()
         print("PostgreSQL table initialized successfully.")
