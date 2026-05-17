@@ -36,8 +36,32 @@ def get_predictions(regions, material, determinand, model_name=None):
     return db.get_predictions(regions, material, determinand, model_name)
 
 @st.cache_data(ttl=60)
+def get_predictions_unique_regions():
+    """Fetch unique prediction regions with cache."""
+    return db.get_predictions_unique_regions()
+
+@st.cache_data(ttl=60)
+def get_predictions_materials(regions):
+    """Fetch unique prediction materials with cache."""
+    return db.get_predictions_materials(regions)
+
+@st.cache_data(ttl=60)
+def get_predictions_determinands(regions, material):
+    """Fetch unique prediction determinands with cache."""
+    return db.get_predictions_determinands(regions, material)
+
+@st.cache_data(ttl=60)
+def get_overall_model_performance(regions, material, determinand):
+    """Fetch overall model performance comparison with cache."""
+    return db.get_overall_model_performance(regions, material, determinand)
+
+@st.cache_data(ttl=60)
 def get_anomalies(start_date, end_date, material, determinand):
     return db.get_anomalies(start_date, end_date, material, determinand)
+
+@st.cache_data(ttl=60)
+def get_total_station_records_count(start_date, end_date, material, determinand):
+    return db.get_total_station_records_count(start_date, end_date, material, determinand)
 
 @st.cache_data(ttl=60)
 def get_gqa(start_date, end_date, material):
@@ -180,6 +204,16 @@ with tab2:
 
         anomaly_df = get_anomalies(start_date, end_date, selected_material_map, selected_determinand_map)
         
+        total_records = get_total_station_records_count(start_date, end_date, selected_material_map, selected_determinand_map)
+        anomaly_count = len(anomaly_df)
+        anomaly_rate = (anomaly_count / total_records * 100) if total_records > 0 else 0.0
+
+        st.subheader("Anomaly Key Performance Indicators")
+        kpi_col1, kpi_col2, kpi_col3 = st.columns(3)
+        kpi_col1.metric("Total Monitored Records", f"{total_records:,}")
+        kpi_col2.metric("Detected Anomalies", f"{anomaly_count:,}")
+        kpi_col3.metric("Anomaly Occurrence Rate", f"{anomaly_rate:.2f}%")
+
         if anomaly_df.empty:
             st.warning("No anomalies found for the selected filters.")
         else:
@@ -206,7 +240,7 @@ with tab2:
             st.info("Click on a point on the map to view that station's history.")
             
             # Use on_select to capture clicks
-            event_data = st.plotly_chart(fig_map, on_select="rerun", selection_mode="points", use_container_width=True)
+            event_data = st.plotly_chart(fig_map, on_select="rerun", selection_mode="points", width='stretch')
             
             # Determine selected station
             selected_station_id = None
@@ -301,7 +335,7 @@ with tab2:
                             hovertext=[f"Z-Score: {z:.2f}" for z in anomalies_only['z_score']]
                         )
                     
-                    st.plotly_chart(fig_hist, use_container_width=True)
+                    st.plotly_chart(fig_hist, width='stretch')
                     
                     with st.expander("View Raw Station Data"):
                         st.dataframe(history_df.sort_values("window_start", ascending=False))
@@ -397,39 +431,83 @@ with tab4:
         (which simply predicts that tomorrow's value will be the same as today's).
     """)
     
-    perf_df = db.get_overall_model_performance()
-    
-    if perf_df.empty:
-        st.info("Insufficient data to calculate overall performance metrics yet.")
+    col_f1, col_f2, col_f3 = st.columns(3)
+    with col_f1:
+        pred_regions_df = get_predictions_unique_regions()
+        if pred_regions_df.empty:
+            selected_regions_perf = []
+        else:
+            region_options = [f"{r} ({int(c)})" for r, c in zip(pred_regions_df['region'], pred_regions_df['total_predictions'])]
+            selected_region_strs = st.multiselect(
+                "Filter by Region(s)",
+                region_options,
+                default=region_options,
+                key="perf_regions"
+            )
+            selected_regions_perf = [s.rsplit(' (', 1)[0] for s in selected_region_strs]
+            
+    with col_f2:
+        if not selected_regions_perf:
+            selected_material_perf = "All"
+        else:
+            pred_materials_df = get_predictions_materials(selected_regions_perf)
+            material_options = [f"{m} ({int(c)})" for m, c in zip(pred_materials_df['sample_material_type'], pred_materials_df['total_predictions'])]
+            selected_material_str = st.selectbox(
+                "Filter by Material Type",
+                ["All"] + material_options,
+                key="perf_material"
+            )
+            selected_material_perf = selected_material_str.rsplit(' (', 1)[0] if selected_material_str != "All" else "All"
+            
+    with col_f3:
+        if not selected_regions_perf:
+            selected_determinand_perf = "All"
+        else:
+            pred_determinands_df = get_predictions_determinands(selected_regions_perf, selected_material_perf)
+            det_options = [f"{d} ({int(c)})" for d, c in zip(pred_determinands_df['determinand_label'], pred_determinands_df['total_predictions'])]
+            selected_determinand_str = st.selectbox(
+                "Filter by Determinand",
+                ["All"] + det_options,
+                key="perf_determinand"
+            )
+            selected_determinand_perf = selected_determinand_str.rsplit(' (', 1)[0] if selected_determinand_str != "All" else "All"
+
+    if not selected_regions_perf:
+        st.warning("Please select at least one region.")
     else:
-        col1, col2 = st.columns(2)
+        perf_df = get_overall_model_performance(selected_regions_perf, selected_material_perf, selected_determinand_perf)
         
-        with col1:
-            st.subheader("Performance Metrics Summary")
-            st.dataframe(perf_df.style.highlight_min(subset=['MSE', 'RMSE'], color='lightgreen')
-                                    .highlight_max(subset=['R2 Score'], color='lightgreen'), 
-                         width='stretch')
+        if perf_df.empty:
+            st.info("Insufficient data to calculate performance metrics for the selected filters.")
+        else:
+            col1, col2 = st.columns(2)
             
-        with col2:
-            st.subheader("MSE Comparison (Lower is better)")
-            fig_mse = px.bar(perf_df, x='Model', y='MSE', color='Model', 
-                             title="Mean Squared Error by Model")
-            st.plotly_chart(fig_mse, width='stretch')
+            with col1:
+                st.subheader("Performance Metrics Summary")
+                st.dataframe(perf_df.style.highlight_min(subset=['MSE', 'RMSE'], color='lightgreen')
+                                        .highlight_max(subset=['R2 Score'], color='lightgreen'), 
+                             width='stretch')
+                
+            with col2:
+                st.subheader("MSE Comparison (Lower is better)")
+                fig_mse = px.bar(perf_df, x='Model', y='MSE', color='Model', 
+                                 title="Mean Squared Error by Model")
+                st.plotly_chart(fig_mse, width='stretch')
+                
+            st.divider()
             
-        st.divider()
-        
-        col3, col4 = st.columns(2)
-        with col3:
-            st.subheader("R² Score Comparison (Higher is better)")
-            fig_r2 = px.bar(perf_df, x='Model', y='R2 Score', color='Model', 
-                            title="R² Score by Model")
-            st.plotly_chart(fig_r2, width='stretch')
-            
-        with col4:
-            st.subheader("Evaluation Coverage")
-            fig_samples = px.pie(perf_df, names='Model', values='Samples', 
-                                 title="Data Points used for Evaluation")
-            st.plotly_chart(fig_samples, width='stretch')
+            col3, col4 = st.columns(2)
+            with col3:
+                st.subheader("R² Score Comparison (Higher is better)")
+                fig_r2 = px.bar(perf_df, x='Model', y='R2 Score', color='Model', 
+                                title="R² Score by Model")
+                st.plotly_chart(fig_r2, width='stretch')
+                
+            with col4:
+                st.subheader("Evaluation Coverage")
+                fig_samples = px.pie(perf_df, names='Model', values='Samples', 
+                                     title="Data Points used for Evaluation")
+                st.plotly_chart(fig_samples, width='stretch')
 
 # --- Tab 5: GQA Overall Statistics ---
 with tab5:
@@ -516,7 +594,7 @@ with tab5:
                         hole=0.4,
                         title="Proportion of River Health Grades"
                     )
-                    st.plotly_chart(fig_gqa_pie, use_container_width=True)
+                    st.plotly_chart(fig_gqa_pie, width='stretch')
                     
                 with col_chart2:
                     st.subheader("Water Quality Parameter Spread by Grade")
@@ -549,7 +627,7 @@ with tab5:
                         points="outliers",
                         log_y=use_log_scale
                     )
-                    st.plotly_chart(fig_box, use_container_width=True)
+                    st.plotly_chart(fig_box, width='stretch')
                     
                 st.divider()
                 
@@ -568,7 +646,7 @@ with tab5:
                         title="Assessments Count by Region & Grade",
                         barmode="stack"
                     )
-                    st.plotly_chart(fig_reg_grade, use_container_width=True)
+                    st.plotly_chart(fig_reg_grade, width='stretch')
                     
                 with col_chart4:
                     st.subheader("Average Metrics by Grade")
@@ -586,11 +664,11 @@ with tab5:
                             'avg_ammonia': '{:.3f} mg/L',
                             'assessments_count': '{:,.0f}'
                         }),
-                        use_container_width=True
+                        width='stretch'
                     )
                     
                 with st.expander("View Filtered GQA Raw Data"):
-                    st.dataframe(filtered_gqa.sort_values('window_start', ascending=False), use_container_width=True)
+                    st.dataframe(filtered_gqa.sort_values('window_start', ascending=False), width='stretch')
 
 # --- Tab 6: AI Predictable Groups Statistics ---
 with tab6:
@@ -641,7 +719,7 @@ with tab6:
                     hole=0.4,
                     title="Overall Eligibility Ratio"
                 )
-                st.plotly_chart(fig_elig_pie, use_container_width=True)
+                st.plotly_chart(fig_elig_pie, width='stretch')
                 
             with dist_col2:
                 st.subheader("Data Suitability Insights")
@@ -673,10 +751,10 @@ with tab6:
                 )
                 newnames = {'predictable_records': 'AI Predictable', 'total_records': 'Total Groups'}
                 fig_reg_elig.for_each_trace(lambda t: t.update(name = newnames[t.name]))
-                st.plotly_chart(fig_reg_elig, use_container_width=True)
+                st.plotly_chart(fig_reg_elig, width='stretch')
                 
                 with st.expander("View Regional Detail"):
-                    st.dataframe(reg_stats, use_container_width=True)
+                    st.dataframe(reg_stats, width='stretch')
                     
         with col_mat:
             st.subheader("AI Eligibility by Material Type")
@@ -692,10 +770,10 @@ with tab6:
                     title="AI Predictable Volumes by Material Type",
                     orientation='h'
                 )
-                st.plotly_chart(fig_mat_elig, use_container_width=True)
+                st.plotly_chart(fig_mat_elig, width='stretch')
                 
                 with st.expander("View Material Detail"):
-                    st.dataframe(mat_stats, use_container_width=True)
+                    st.dataframe(mat_stats, width='stretch')
                     
         st.divider()
         
@@ -713,10 +791,10 @@ with tab6:
                 orientation='h'
             )
             fig_det_elig.update_layout(yaxis={'categoryorder': 'total ascending'})
-            st.plotly_chart(fig_det_elig, use_container_width=True)
+            st.plotly_chart(fig_det_elig, width='stretch')
             
             with st.expander("View Determinand Detail"):
-                st.dataframe(det_stats, use_container_width=True)
+                st.dataframe(det_stats, width='stretch')
 
 st.markdown("---")
 st.caption("Data is cached for 60 seconds.")

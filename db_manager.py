@@ -109,14 +109,14 @@ class DatabaseManager:
         params = []
         
         # Filter for station-material-determinand triples with at least 3 records in station_daily_averages
-        filters.append("""
-            (station_id, sample_material_type, determinand_label) IN (
-                SELECT station_id, sample_material_type, determinand_label
-                FROM station_daily_averages 
-                GROUP BY station_id, sample_material_type, determinand_label
-                HAVING COUNT(*) >= 3
-            )
-        """)
+        # filters.append("""
+        #     (station_id, sample_material_type, determinand_label) IN (
+        #         SELECT station_id, sample_material_type, determinand_label
+        #         FROM station_daily_averages 
+        #         GROUP BY station_id, sample_material_type, determinand_label
+        #         HAVING COUNT(*) >= 3
+        #     )
+        # """)
         
         if start_date:
             filters.append("window_start::date >= %s")
@@ -141,6 +141,41 @@ class DatabaseManager:
             ORDER BY window_start DESC;
         """
         return self._fetch_as_df(query, tuple(params) if params else None)
+
+    def get_total_station_records_count(self, start_date=None, end_date=None, material="All", determinand="All"):
+        """Fetch total records in station_daily_averages with filters, only including stations with enough history."""
+        filters = []
+        params = []
+        # filters.append("""
+        #     (station_id, sample_material_type, determinand_label) IN (
+        #         SELECT station_id, sample_material_type, determinand_label
+        #         FROM station_daily_averages 
+        #         GROUP BY station_id, sample_material_type, determinand_label
+        #         HAVING COUNT(*) >= 3
+        #     )
+        # """)
+        if start_date:
+            filters.append("window_start::date >= %s")
+            params.append(start_date)
+        if end_date:
+            filters.append("window_start::date <= %s")
+            params.append(end_date)
+        if material != "All":
+            filters.append("sample_material_type = %s")
+            params.append(material)
+        if determinand != "All":
+            filters.append("determinand_label = %s")
+            params.append(determinand)
+        where_clause = "WHERE " + " AND ".join(filters) if filters else ""
+        query = f"""
+            SELECT COUNT(*) 
+            FROM station_daily_averages
+            {where_clause};
+        """
+        df = self._fetch_as_df(query, tuple(params) if params else None)
+        if not df.empty:
+            return int(df.iloc[0, 0])
+        return 0
 
     def get_station_history(self, station_id, material, determinand):
         """Fetch daily averages and anomaly status for a specific station."""
@@ -269,10 +304,66 @@ class DatabaseManager:
             "count": len(df)
         }
 
-    def get_overall_model_performance(self):
-        """Fetch overall performance metrics for all models and a persistence baseline."""
-        # 1. Fetch AI Model Metrics (using latest prediction for each target date)
+    def get_predictions_unique_regions(self):
+        """Fetch unique regions and their total prediction counts."""
         query = """
+            SELECT region, COUNT(*) as total_predictions
+            FROM daily_predictions
+            GROUP BY region
+            ORDER BY total_predictions DESC;
+        """
+        return self._fetch_as_df(query)
+
+    def get_predictions_materials(self, regions):
+        """Fetch materials and their prediction counts for the selected regions."""
+        if not regions:
+            return pd.DataFrame()
+        query = """
+            SELECT sample_material_type, COUNT(*) as total_predictions
+            FROM daily_predictions
+            WHERE region IN %s
+            GROUP BY sample_material_type
+            ORDER BY total_predictions DESC;
+        """
+        return self._fetch_as_df(query, (tuple(regions),))
+
+    def get_predictions_determinands(self, regions, material):
+        """Fetch determinands and their prediction counts for the selected regions and material."""
+        if not regions:
+            return pd.DataFrame()
+        filters = ["region IN %s"]
+        params = [tuple(regions)]
+        if material != "All":
+            filters.append("sample_material_type = %s")
+            params.append(material)
+            
+        where_clause = "WHERE " + " AND ".join(filters)
+        query = f"""
+            SELECT determinand_label, COUNT(*) as total_predictions
+            FROM daily_predictions
+            {where_clause}
+            GROUP BY determinand_label
+            ORDER BY total_predictions DESC;
+        """
+        return self._fetch_as_df(query, tuple(params))
+
+    def get_overall_model_performance(self, regions=None, material="All", determinand="All"):
+        """Fetch overall performance metrics for all models and a persistence baseline with filters."""
+        filters = []
+        params = []
+        if regions:
+            filters.append("p.region IN %s")
+            params.append(tuple(regions))
+        if material != "All":
+            filters.append("p.sample_material_type = %s")
+            params.append(material)
+        if determinand != "All":
+            filters.append("p.determinand_label = %s")
+            params.append(determinand)
+            
+        where_clause = "WHERE " + " AND ".join(filters) if filters else ""
+        
+        query = f"""
             WITH latest_predictions AS (
                 SELECT DISTINCT ON (model_name, region, sample_material_type, determinand_label, target_date)
                     model_name, region, sample_material_type, determinand_label, target_date, predicted_value
@@ -285,12 +376,26 @@ class DatabaseManager:
                 p.region = a.region AND 
                 p.sample_material_type = a.sample_material_type AND 
                 p.determinand_label = a.determinand_label AND 
-                p.target_date = a.window_start;
+                p.target_date = a.window_start
+            {where_clause};
         """
-        df = self._fetch_as_df(query)
+        df = self._fetch_as_df(query, tuple(params) if params else None)
         
-        # 2. Fetch Persistence Baseline Data (Fair comparison: Most Recent available value)
-        baseline_query = """
+        baseline_filters = []
+        baseline_params = []
+        if regions:
+            baseline_filters.append("s.region IN %s")
+            baseline_params.append(tuple(regions))
+        if material != "All":
+            baseline_filters.append("s.sample_material_type = %s")
+            baseline_params.append(material)
+        if determinand != "All":
+            baseline_filters.append("s.determinand_label = %s")
+            baseline_params.append(determinand)
+            
+        baseline_where = "AND " + " AND ".join(baseline_filters) if baseline_filters else ""
+        
+        baseline_query = f"""
             WITH ai_scope AS (
                 SELECT DISTINCT region, sample_material_type, determinand_label, target_date
                 FROM daily_predictions
@@ -312,16 +417,15 @@ class DatabaseManager:
                 ORDER BY window_start DESC
                 LIMIT 1
             ) p ON TRUE
-            WHERE p.avg_result IS NOT NULL;
+            WHERE p.avg_result IS NOT NULL {baseline_where};
         """
-        baseline_df = self._fetch_as_df(baseline_query)
+        baseline_df = self._fetch_as_df(baseline_query, tuple(baseline_params) if baseline_params else None)
         
         from sklearn.metrics import mean_squared_error, r2_score
         import numpy as np
         
         results = []
         
-        # Calculate for AI models
         if not df.empty:
             for model in df['model_name'].unique():
                 m_df = df[df['model_name'] == model]
@@ -337,7 +441,6 @@ class DatabaseManager:
                         "Samples": len(m_df)
                     })
         
-        # Calculate for Baseline
         if not baseline_df.empty and len(baseline_df) >= 2:
             actuals = baseline_df['actual_value'].astype(float)
             preds = baseline_df['predicted_value'].astype(float)
