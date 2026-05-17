@@ -370,7 +370,7 @@ class DatabaseManager:
                 FROM daily_predictions
                 ORDER BY model_name, region, sample_material_type, determinand_label, target_date, prediction_date DESC
             )
-            SELECT p.model_name, p.predicted_value, a.avg_result as actual_value
+            SELECT p.model_name, p.determinand_label, p.predicted_value, a.avg_result as actual_value
             FROM latest_predictions p
             JOIN region_daily_averages a ON 
                 p.region = a.region AND 
@@ -400,7 +400,7 @@ class DatabaseManager:
                 SELECT DISTINCT region, sample_material_type, determinand_label, target_date
                 FROM daily_predictions
             )
-            SELECT p.avg_result as predicted_value, a2.avg_result as actual_value
+            SELECT s.determinand_label, p.avg_result as predicted_value, a2.avg_result as actual_value
             FROM ai_scope s
             JOIN region_daily_averages a2 ON 
                 s.region = a2.region AND 
@@ -426,34 +426,67 @@ class DatabaseManager:
         
         results = []
         
+        def calculate_metrics_for_model(model_name, model_df):
+            """Calculate sample-weighted normalized MSE/RMSE and R2 scores by determinand."""
+            det_results = []
+            for det, det_df in model_df.groupby('determinand_label'):
+                n_samples = len(det_df)
+                if n_samples >= 2:
+                    actuals = det_df['actual_value'].astype(float)
+                    preds = det_df['predicted_value'].astype(float)
+                    
+                    mse = mean_squared_error(actuals, preds)
+                    rmse = np.sqrt(mse)
+                    r2 = r2_score(actuals, preds)
+                    
+                    std = actuals.std()
+                    if std > 1e-8:
+                        nmse = mse / (std ** 2)
+                        nrmse = rmse / std
+                    else:
+                        nmse = 0.0
+                        nrmse = 0.0
+                    
+                    det_results.append({
+                        "nmse": nmse,
+                        "nrmse": nrmse,
+                        "r2": r2,
+                        "samples": n_samples
+                    })
+            
+            if not det_results:
+                return None
+                
+            total_samples = sum(x['samples'] for x in det_results)
+            if total_samples == 0:
+                return None
+                
+            avg_nmse = sum(x['nmse'] * x['samples'] for x in det_results) / total_samples
+            avg_nrmse = sum(x['nrmse'] * x['samples'] for x in det_results) / total_samples
+            avg_r2 = sum(x['r2'] * x['samples'] for x in det_results) / total_samples
+            
+            return {
+                "Model": model_name,
+                "Normalized MSE": avg_nmse,
+                "Normalized RMSE": avg_nrmse,
+                "R2 Score": avg_r2,
+                "Samples": total_samples
+            }
+        
         if not df.empty:
             for model in df['model_name'].unique():
                 m_df = df[df['model_name'] == model]
-                if len(m_df) >= 2:
-                    actuals = m_df['actual_value'].astype(float)
-                    preds = m_df['predicted_value'].astype(float)
-                    mse = mean_squared_error(actuals, preds)
-                    results.append({
-                        "Model": model,
-                        "MSE": mse,
-                        "RMSE": np.sqrt(mse),
-                        "R2 Score": r2_score(actuals, preds),
-                        "Samples": len(m_df)
-                    })
+                metrics = calculate_metrics_for_model(model, m_df)
+                if metrics:
+                    results.append(metrics)
         
-        if not baseline_df.empty and len(baseline_df) >= 2:
-            actuals = baseline_df['actual_value'].astype(float)
-            preds = baseline_df['predicted_value'].astype(float)
-            mse = mean_squared_error(actuals, preds)
-            results.append({
-                "Model": "Baseline (Persistence)",
-                "MSE": mse,
-                "RMSE": np.sqrt(mse),
-                "R2 Score": r2_score(actuals, preds),
-                "Samples": len(baseline_df)
-            })
+        if not baseline_df.empty:
+            baseline_df['model_name'] = 'Baseline (Persistence)'
+            metrics = calculate_metrics_for_model('Baseline (Persistence)', baseline_df)
+            if metrics:
+                results.append(metrics)
             
-        return pd.DataFrame(results).sort_values("MSE") if results else pd.DataFrame()
+        return pd.DataFrame(results).sort_values("Normalized MSE") if results else pd.DataFrame()
 
     def get_predictable_groups_overall_stats(self):
         """Fetch overall stats for predictable groups vs all groups."""

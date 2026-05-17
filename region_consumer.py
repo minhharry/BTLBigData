@@ -8,6 +8,7 @@ import os
 import psycopg2
 from psycopg2.extras import execute_values
 from pyspark.sql import SparkSession
+from pyspark.sql.window import Window
 from pyspark.sql.functions import (
     col, from_json, to_timestamp, window, when, avg, expr, stddev, count
 )
@@ -103,8 +104,47 @@ def init_db():
             conn.close()
 
 def process_batch(df, epoch_id):
-    """Process a batch of Spark streaming data, upserting to DB and triggering predictions."""
-    flat_df = df.select(
+    """Process a batch of Spark streaming data, removing outliers before calculating averages."""
+    batch_df = df.dropna(subset=["samplingPoint_region", "sampleMaterialType", "determinand_prefLabel", "unit", "numeric_result"])
+    batch_df = batch_df.withColumn("window", window(col("timestamp"), "1 day"))
+    
+    window_spec = Window.partitionBy(
+        "samplingPoint_region",
+        "sampleMaterialType",
+        "determinand_prefLabel",
+        "unit",
+        "window"
+    )
+    
+    batch_with_stats = batch_df \
+        .withColumn("group_mean", avg(col("numeric_result")).over(window_spec)) \
+        .withColumn("group_std", stddev(col("numeric_result")).over(window_spec))
+        
+    cleaned_batch = batch_with_stats.filter(
+        (col("group_std").isNull()) |
+        (col("group_std") == 0.0) |
+        (expr("abs((numeric_result - group_mean) / group_std) <= 3.0"))
+    )
+    
+    windowed_df = cleaned_batch.groupBy(
+        col("samplingPoint_region"),
+        col("sampleMaterialType"),
+        col("determinand_prefLabel"),
+        col("unit"),
+        col("window")
+    ).agg(
+        avg(col("numeric_result")).alias("avg_result"),
+        stddev(col("numeric_result")).alias("std_result"),
+        count(col("numeric_result")).alias("num_samples"),
+        expr("percentile_approx(numeric_result, 0.1)").alias("p10_result"),
+        expr("percentile_approx(numeric_result, 0.9)").alias("p90_result"),
+        avg(col("samplingPoint_latitude").cast("double")).alias("avg_lat"),
+        avg(col("samplingPoint_longitude").cast("double")).alias("avg_long")
+    )
+    
+    windowed_df = windowed_df.dropna(subset=["samplingPoint_region", "sampleMaterialType", "determinand_prefLabel", "unit", "window", "avg_result"])
+    
+    flat_df = windowed_df.select(
         col("samplingPoint_region").alias("region"),
         col("sampleMaterialType").alias("sample_material_type"),
         col("determinand_prefLabel").alias("determinand_label"),
@@ -139,6 +179,16 @@ def process_batch(df, epoch_id):
         )
         for row in rows
     ]
+
+    deduped_records = {}
+    for r in records:
+        key = (r[0], r[1], r[2], r[4])
+        if key not in deduped_records:
+            deduped_records[key] = r
+        else:
+            if r[8] > deduped_records[key][8]:
+                deduped_records[key] = r
+    records = list(deduped_records.values())
 
     upsert_query = """
         INSERT INTO region_daily_averages (
@@ -231,6 +281,16 @@ def process_batch(df, epoch_id):
                 avg_long = sum(longs) / len(longs) if longs else None
                 gqa_records.append((region, material_type, w_start, w_end, worst_grade, do_val, bod_val, amm_val, avg_lat, avg_long))
             
+    deduped_gqa = {}
+    for r in gqa_records:
+        key = (r[0], r[1], r[2])
+        if key not in deduped_gqa:
+            deduped_gqa[key] = r
+        else:
+            if r[4] > deduped_gqa[key][4]:
+                deduped_gqa[key] = r
+    gqa_records = list(deduped_gqa.values())
+
     if gqa_records:
         gqa_upsert_query = """
             INSERT INTO region_daily_gqa (
@@ -330,29 +390,8 @@ def main():
     
     df = df.withColumn("timestamp", to_timestamp(col("phenomenonTime"), "yyyy-MM-dd HH:mm:ss"))
 
-    windowed_df = df \
-        .withWatermark("timestamp", "1 day") \
-        .groupBy(
-            col("samplingPoint_region"),
-            col("sampleMaterialType"),
-            col("determinand_prefLabel"),
-            col("unit"),
-            window(col("timestamp"), "1 day")
-        ) \
-        .agg(
-            avg(col("numeric_result")).alias("avg_result"),
-            stddev(col("numeric_result")).alias("std_result"),
-            count(col("numeric_result")).alias("num_samples"),
-            expr("percentile_approx(numeric_result, 0.1)").alias("p10_result"),
-            expr("percentile_approx(numeric_result, 0.9)").alias("p90_result"),
-            avg(col("samplingPoint_latitude").cast("double")).alias("avg_lat"),
-            avg(col("samplingPoint_longitude").cast("double")).alias("avg_long")
-        )
-        
-    windowed_df = windowed_df.dropna(subset=["samplingPoint_region", "sampleMaterialType", "determinand_prefLabel", "unit", "window", "avg_result"])
-
-    query = windowed_df.writeStream \
-        .outputMode("update") \
+    query = df.writeStream \
+        .outputMode("append") \
         .foreachBatch(process_batch) \
         .trigger(processingTime=FLUSH_INTERVAL) \
         .start()

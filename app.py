@@ -484,14 +484,14 @@ with tab4:
             
             with col1:
                 st.subheader("Performance Metrics Summary")
-                st.dataframe(perf_df.style.highlight_min(subset=['MSE', 'RMSE'], color='lightgreen')
+                st.dataframe(perf_df.style.highlight_min(subset=['Normalized MSE', 'Normalized RMSE'], color='lightgreen')
                                         .highlight_max(subset=['R2 Score'], color='lightgreen'), 
                              width='stretch')
                 
             with col2:
-                st.subheader("MSE Comparison (Lower is better)")
-                fig_mse = px.bar(perf_df, x='Model', y='MSE', color='Model', 
-                                 title="Mean Squared Error by Model")
+                st.subheader("Normalized MSE Comparison (Lower is better)")
+                fig_mse = px.bar(perf_df, x='Model', y='Normalized MSE', color='Model', 
+                                 title="Normalized Mean Squared Error by Model")
                 st.plotly_chart(fig_mse, width='stretch')
                 
             st.divider()
