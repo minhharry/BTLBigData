@@ -385,7 +385,7 @@ def main():
         .option("kafka.bootstrap.servers", KAFKA_BOOTSTRAP_SERVERS) \
         .option("subscribe", KAFKA_TOPIC) \
         .option("startingOffsets", "earliest") \
-        .option("maxOffsetsPerTrigger", 50000) \
+        .option("maxOffsetsPerTrigger", 500000) \
         .load()
 
     parsed_stream = raw_stream.select(from_json(col("value").cast("string"), schema).alias("data")).select("data.*")
