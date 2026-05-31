@@ -256,6 +256,49 @@ class DatabaseManager:
             "materials": materials
         }
 
+    def get_wqi_data(self, start_date=None, end_date=None, material="All"):
+        """Fetch WQI data with filters."""
+        filters = []
+        params = []
+        
+        if start_date:
+            filters.append("window_start::date >= %s")
+            params.append(start_date)
+        if end_date:
+            filters.append("window_start::date <= %s")
+            params.append(end_date)
+        if material != "All":
+            filters.append("sample_material_type = %s")
+            params.append(material)
+            
+        where_clause = "WHERE " + " AND ".join(filters) if filters else ""
+        
+        query = f"""
+            SELECT region, sample_material_type, window_start, window_end,
+                   wqi_value, wqi_quality,
+                   do_value, ph_value, nh4_value, no2_value, po4_value,
+                   tss_value, cod_value, coliform_value, temperature_value,
+                   latitude, longitude
+            FROM region_daily_wqi
+            {where_clause}
+            ORDER BY window_start;
+        """
+        return self._fetch_as_df(query, tuple(params) if params else None)
+
+    def get_wqi_metadata(self):
+        """Fetch metadata for WQI filters."""
+        dates_query = "SELECT MIN(window_start::date), MAX(window_start::date) FROM region_daily_wqi;"
+        materials_query = "SELECT sample_material_type, COUNT(*) FROM region_daily_wqi GROUP BY sample_material_type ORDER BY COUNT(*) DESC;"
+        
+        dates = self._fetch_as_df(dates_query)
+        materials = self._fetch_as_df(materials_query)
+        
+        return {
+            "min_date": dates.iloc[0, 0] if not dates.empty else None,
+            "max_date": dates.iloc[0, 1] if not dates.empty else None,
+            "materials": materials
+        }
+
     def get_model_performance_metrics(self, regions, material, determinand, model_name):
         """Fetch joined actual and predicted data to calculate performance metrics (MSE, RMSE, R2)."""
         if not regions or not material or not determinand or not model_name:

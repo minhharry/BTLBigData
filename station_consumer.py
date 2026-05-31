@@ -17,6 +17,7 @@ import pandas as pd
 import numpy as np
 
 load_dotenv()
+# os.environ["JAVA_HOME"] = "/opt/homebrew/opt/openjdk@17"
 
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 KAFKA_TOPIC = "water-quality-raw"

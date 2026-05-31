@@ -54,6 +54,10 @@ The pipeline consists of five main stages:
     .venv\Scripts\activate
     python clear_data.py
     ```
+5.  **Add data**
+    create data folder
+    add dataset_DACN-2024-2022.csv to data folder
+    add observations-2026-4-3-sorted.csv to data folder
 
 ## 🏃 Running the Pipeline
 
@@ -61,13 +65,15 @@ Open four separate terminals and activate the environment: `.venv\Scripts\activa
 
 ### 1. Start the Data Producer
 ```powershell
-python producer.py
+python producer.py # for UK dataset
+python producer2.py # for Vietnamese dataset
 ```
 
 ### 2. Start the Regional Stream Processor
 Handles regional stats, GQA, and AI Predictions:
 ```powershell
-python region_consumer.py
+python region_consumer.py # for both dataset
+python region_consumer_2.py # for Vietnamese dataset only
 ```
 
 ### 3. Start the Station Stream Processor

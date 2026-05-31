@@ -1,5 +1,6 @@
 """
 Spark Structured Streaming consumer for calculating regional daily averages of water quality.
+Adapted for Vietnamese aquaculture dataset (DACN) - computes WQI instead of GQA.
 Aggregates data by region, material type, and determinand on a daily window.
 Triggers predictive models for regions with sufficient data.
 """
@@ -30,10 +31,208 @@ print("FLUSH INTERVAL: ", FLUSH_INTERVAL)
 
 # os.environ["JAVA_HOME"] = "/opt/homebrew/opt/openjdk@17"
 
+# Vietnamese QCVN 08-MT:2023 thresholds for aquaculture surface water (Column B1)
+# Each parameter: (qi_good, qi_bad, BP_i_lower, BP_i_upper, q_i_lower, q_i_upper)
+# WQI sub-index breakpoints for Vietnamese aquaculture standards
+WQI_PARAMS = {
+    "DO": {
+        # DO in mg/L - higher is better
+        "breakpoints": [
+            (0.0, 2.0, 1, 25),
+            (2.0, 4.0, 25, 50),
+            (4.0, 6.0, 50, 75),
+            (6.0, 8.0, 75, 100),
+        ],
+        "higher_is_better": True,
+    },
+    "pH": {
+        # pH is optimal in range 6.5-8.5
+        "breakpoints": [
+            (0.0, 5.5, 1, 25),
+            (5.5, 6.0, 25, 50),
+            (6.0, 6.5, 50, 75),
+            (6.5, 8.5, 75, 100),
+            (8.5, 9.0, 75, 50),
+            (9.0, 9.5, 50, 25),
+            (9.5, 14.0, 25, 1),
+        ],
+        "higher_is_better": None,  # range-based
+    },
+    "N-NH4": {
+        # Ammoniacal Nitrogen mg/L - lower is better
+        "breakpoints": [
+            (0.0, 0.1, 100, 75),
+            (0.1, 0.2, 75, 50),
+            (0.2, 0.5, 50, 25),
+            (0.5, 1.0, 25, 1),
+        ],
+        "higher_is_better": False,
+    },
+    "N-NO2": {
+        # Nitrite as N mg/L - lower is better
+        "breakpoints": [
+            (0.0, 0.01, 100, 75),
+            (0.01, 0.02, 75, 50),
+            (0.02, 0.04, 50, 25),
+            (0.04, 0.05, 25, 1),
+        ],
+        "higher_is_better": False,
+    },
+    "P-PO4": {
+        # Orthophosphate as P mg/L - lower is better
+        "breakpoints": [
+            (0.0, 0.1, 100, 75),
+            (0.1, 0.2, 75, 50),
+            (0.2, 0.3, 50, 25),
+            (0.3, 0.5, 25, 1),
+        ],
+        "higher_is_better": False,
+    },
+    "TSS": {
+        # Total Suspended Solids mg/L - lower is better
+        "breakpoints": [
+            (0.0, 20.0, 100, 75),
+            (20.0, 30.0, 75, 50),
+            (30.0, 50.0, 50, 25),
+            (50.0, 100.0, 25, 1),
+        ],
+        "higher_is_better": False,
+    },
+    "COD": {
+        # COD mg/L - lower is better
+        "breakpoints": [
+            (0.0, 10.0, 100, 75),
+            (10.0, 15.0, 75, 50),
+            (15.0, 30.0, 50, 25),
+            (30.0, 50.0, 25, 1),
+        ],
+        "higher_is_better": False,
+    },
+    "Coliform": {
+        # Total Coliform MPN/100mL - lower is better
+        "breakpoints": [
+            (0.0, 2500.0, 100, 75),
+            (2500.0, 5000.0, 75, 50),
+            (5000.0, 7500.0, 50, 25),
+            (7500.0, 10000.0, 25, 1),
+        ],
+        "higher_is_better": False,
+    },
+    "Temperature": {
+        # Temperature °C - optimal range
+        "breakpoints": [
+            (0.0, 15.0, 25, 50),
+            (15.0, 20.0, 50, 75),
+            (20.0, 30.0, 75, 100),
+            (30.0, 35.0, 100, 75),
+            (35.0, 40.0, 75, 50),
+            (40.0, 50.0, 50, 25),
+        ],
+        "higher_is_better": None,  # range-based
+    },
+}
+
+# Map from producer2 determinand labels to WQI parameter keys
+DETERMINAND_TO_WQI_KEY = {
+    "Oxygen, Dissolved as O2": "DO",
+    "pH": "pH",
+    "Ammoniacal Nitrogen as N": "N-NH4",
+    "Nitrogen, Nitrite as N": "N-NO2",
+    "Phosphorus, Orthophosphate as P": "P-PO4",
+    "Suspended Solids (Filterable) at 105C": "TSS",
+    "COD as O2 : Dichromate Method": "COD",
+    "Coliform, Total, Conf by MPN": "Coliform",
+    "Temperature": "Temperature",
+}
+
+
+def calculate_sub_index(value, param_key):
+    """Calculate the WQI sub-index for a single parameter using linear interpolation.
+    
+    Uses Vietnamese standard breakpoint tables to convert raw measurement values
+    to a 1-100 quality score via piecewise linear interpolation.
+    """
+    if param_key not in WQI_PARAMS:
+        return None
+    
+    config = WQI_PARAMS[param_key]
+    breakpoints = config["breakpoints"]
+    
+    for bp_low, bp_high, q_low, q_high in breakpoints:
+        if bp_low <= value <= bp_high:
+            # Linear interpolation within the breakpoint range
+            if bp_high == bp_low:
+                return q_low
+            ratio = (value - bp_low) / (bp_high - bp_low)
+            return q_low + ratio * (q_high - q_low)
+    
+    # Value outside all breakpoint ranges
+    # If below lowest breakpoint
+    if value < breakpoints[0][0]:
+        return breakpoints[0][2]  # Return q_low of first range
+    # If above highest breakpoint
+    if value > breakpoints[-1][1]:
+        return breakpoints[-1][3]  # Return q_high of last range
+    
+    return None
+
+
+def calculate_wqi(sub_indices):
+    """Calculate overall WQI from sub-indices using the Vietnamese standard formula.
+    
+    WQI = (1/n) * sum(qi) * 100 / 100
+    where qi are the individual sub-index scores (1-100 scale).
+    
+    The final WQI is the weighted average of available sub-indices.
+    """
+    if not sub_indices:
+        return None, None
+    
+    # Separate pH sub-index (handled differently in Vietnamese WQI)
+    ph_qi = sub_indices.pop("pH", None)
+    
+    # Group remaining into categories
+    # Group 1: DO (dissolved oxygen) - treated specially
+    do_qi = sub_indices.pop("DO", None)
+    
+    # Group 2: All other parameters
+    other_qis = list(sub_indices.values())
+    
+    if not other_qis:
+        return None, None
+    
+    # Vietnamese WQI formula:
+    # WQI = WQI_pH * (1/n * sum(qi_other))^(1/1) * WQI_DO^(1/1) / 100
+    # Simplified: WQI = (1/n) * sum(all qi) for practical purposes
+    
+    all_qis = other_qis.copy()
+    if do_qi is not None:
+        all_qis.append(do_qi)
+    if ph_qi is not None:
+        all_qis.append(ph_qi)
+    
+    n = len(all_qis)
+    wqi = sum(all_qis) / n
+    
+    # Classify WQI into quality level
+    if wqi >= 91:
+        quality = "Rất tốt"       # Very Good
+    elif wqi >= 76:
+        quality = "Tốt"           # Good
+    elif wqi >= 51:
+        quality = "Trung bình"    # Average
+    elif wqi >= 26:
+        quality = "Xấu"          # Bad
+    else:
+        quality = "Rất xấu"      # Very Bad
+    
+    return round(wqi, 2), quality
+
+
 def get_spark_session():
     """Create and return a Spark session configured for Kafka and PostgreSQL."""
     return SparkSession.builder \
-        .appName("RegionDailyAveragesCalculator") \
+        .appName("RegionDailyAveragesCalculator_WQI") \
         .master("local[*]") \
         .config("spark.driver.host", "127.0.0.1") \
         .config("spark.driver.bindAddress", "127.0.0.1") \
@@ -44,7 +243,7 @@ def get_spark_session():
         .getOrCreate()
 
 def init_db():
-    """Initialize PostgreSQL tables for regional averages and predictions."""
+    """Initialize PostgreSQL tables for regional averages and WQI."""
     conn = None
     try:
         conn = psycopg2.connect(
@@ -80,16 +279,23 @@ def init_db():
                 PRIMARY KEY (region, sample_material_type, determinand_label, model_name, prediction_date, target_date)
             );
         """
-        create_gqa_table_query = """
-            CREATE TABLE IF NOT EXISTS region_daily_gqa (
+        create_wqi_table_query = """
+            CREATE TABLE IF NOT EXISTS region_daily_wqi (
                 region VARCHAR(255),
                 sample_material_type VARCHAR(255),
                 window_start TIMESTAMP,
                 window_end TIMESTAMP,
-                gqa_grade VARCHAR(2),
+                wqi_value DOUBLE PRECISION,
+                wqi_quality VARCHAR(50),
                 do_value DOUBLE PRECISION,
-                bod_value DOUBLE PRECISION,
-                ammonia_value DOUBLE PRECISION,
+                ph_value DOUBLE PRECISION,
+                nh4_value DOUBLE PRECISION,
+                no2_value DOUBLE PRECISION,
+                po4_value DOUBLE PRECISION,
+                tss_value DOUBLE PRECISION,
+                cod_value DOUBLE PRECISION,
+                coliform_value DOUBLE PRECISION,
+                temperature_value DOUBLE PRECISION,
                 latitude DOUBLE PRECISION,
                 longitude DOUBLE PRECISION,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -106,12 +312,12 @@ def init_db():
         """
         cursor.execute(create_table_query)
         cursor.execute(create_predictions_table_query)
-        cursor.execute(create_gqa_table_query)
+        cursor.execute(create_wqi_table_query)
         cursor.execute(create_index_perf_query)
         cursor.execute(create_index_scope_query)
         conn.commit()
         cursor.close()
-        print("PostgreSQL table initialized successfully.")
+        print("PostgreSQL tables initialized successfully (with region_daily_wqi).")
     except Exception as e:
         print(f"Failed to initialize PostgreSQL table: {e}")
     finally:
@@ -237,17 +443,16 @@ def process_batch(df, epoch_id):
             conn.close()
     print("Upserted batch")
     
-    # Calculate GQA
+    # Calculate WQI (instead of GQA)
     from collections import defaultdict
-    gqa_groups = defaultdict(list)
+    wqi_groups = defaultdict(list)
     for row in rows:
-        gqa_groups[(row.region, row.sample_material_type, row.window_start, row.window_end)].append(row)
+        wqi_groups[(row.region, row.sample_material_type, row.window_start, row.window_end)].append(row)
         
-    gqa_records = []
-    for (region, material_type, w_start, w_end), group_rows in gqa_groups.items():
-        do_val = None
-        bod_val = None
-        amm_val = None
+    wqi_records = []
+    for (region, material_type, w_start, w_end), group_rows in wqi_groups.items():
+        # Collect parameter values from determinand labels
+        param_values = {}
         lats = []
         longs = []
         
@@ -255,69 +460,81 @@ def process_batch(df, epoch_id):
             lats.append(r.avg_lat)
             longs.append(r.avg_long)
             label = str(r.determinand_label)
-            if label == "Oxygen, Dissolved, % Saturation":
-                do_val = r.p10_result
-            elif label == "BOD : 5 Day ATU":
-                bod_val = r.p90_result
-            elif label == "Ammoniacal Nitrogen as N":
-                amm_val = r.p90_result
-                
-        # Only calculate if all 3 determinands exist
-        if do_val is not None and bod_val is not None and amm_val is not None:
-            grades = []
             
-            # Dissolved Oxygen grade
-            if do_val >= 80: grades.append(('A', 1))
-            elif do_val >= 70: grades.append(('B', 2))
-            elif do_val >= 60: grades.append(('C', 3))
-            elif do_val >= 50: grades.append(('D', 4))
-            elif do_val >= 20: grades.append(('E', 5))
-            else: grades.append(('F', 6))
+            if label in DETERMINAND_TO_WQI_KEY:
+                wqi_key = DETERMINAND_TO_WQI_KEY[label]
+                param_values[wqi_key] = r.avg_result
+        
+        # Calculate sub-indices for all available parameters
+        sub_indices = {}
+        for param_key, value in param_values.items():
+            if value is not None:
+                qi = calculate_sub_index(value, param_key)
+                if qi is not None:
+                    sub_indices[param_key] = qi
+        
+        # Need at least 3 parameters to calculate a meaningful WQI
+        if len(sub_indices) >= 3:
+            wqi_value, wqi_quality = calculate_wqi(sub_indices.copy())
             
-            # BOD grade
-            if bod_val <= 2.5: grades.append(('A', 1))
-            elif bod_val <= 4: grades.append(('B', 2))
-            elif bod_val <= 6: grades.append(('C', 3))
-            elif bod_val <= 8: grades.append(('D', 4))
-            elif bod_val <= 15: grades.append(('E', 5))
-            else: grades.append(('F', 6))
-            
-            # Ammonia grade
-            if amm_val <= 0.25: grades.append(('A', 1))
-            elif amm_val <= 0.6: grades.append(('B', 2))
-            elif amm_val <= 1.3: grades.append(('C', 3))
-            elif amm_val <= 2.5: grades.append(('D', 4))
-            elif amm_val <= 9.0: grades.append(('E', 5))
-            else: grades.append(('F', 6))
-            
-            if grades:
-                worst_grade = max(grades, key=lambda x: x[1])[0]
+            if wqi_value is not None:
                 avg_lat = sum(lats) / len(lats) if lats else None
                 avg_long = sum(longs) / len(longs) if longs else None
-                gqa_records.append((region, material_type, w_start, w_end, worst_grade, do_val, bod_val, amm_val, avg_lat, avg_long))
+                
+                wqi_records.append((
+                    region,
+                    material_type,
+                    w_start,
+                    w_end,
+                    wqi_value,
+                    wqi_quality,
+                    param_values.get("DO"),
+                    param_values.get("pH"),
+                    param_values.get("N-NH4"),
+                    param_values.get("N-NO2"),
+                    param_values.get("P-PO4"),
+                    param_values.get("TSS"),
+                    param_values.get("COD"),
+                    param_values.get("Coliform"),
+                    param_values.get("Temperature"),
+                    avg_lat,
+                    avg_long,
+                ))
             
-    deduped_gqa = {}
-    for r in gqa_records:
+    deduped_wqi = {}
+    for r in wqi_records:
         key = (r[0], r[1], r[2])
-        if key not in deduped_gqa:
-            deduped_gqa[key] = r
+        if key not in deduped_wqi:
+            deduped_wqi[key] = r
         else:
-            if r[4] > deduped_gqa[key][4]:
-                deduped_gqa[key] = r
-    gqa_records = list(deduped_gqa.values())
+            # Keep the one with higher WQI (better quality)
+            if r[4] > deduped_wqi[key][4]:
+                deduped_wqi[key] = r
+    wqi_records = list(deduped_wqi.values())
 
-    if gqa_records:
-        gqa_upsert_query = """
-            INSERT INTO region_daily_gqa (
-                region, sample_material_type, window_start, window_end, gqa_grade, do_value, bod_value, ammonia_value, latitude, longitude
+    if wqi_records:
+        wqi_upsert_query = """
+            INSERT INTO region_daily_wqi (
+                region, sample_material_type, window_start, window_end, 
+                wqi_value, wqi_quality,
+                do_value, ph_value, nh4_value, no2_value, po4_value,
+                tss_value, cod_value, coliform_value, temperature_value,
+                latitude, longitude
             ) VALUES %s
             ON CONFLICT (region, sample_material_type, window_start) 
             DO UPDATE SET 
                 window_end = EXCLUDED.window_end,
-                gqa_grade = EXCLUDED.gqa_grade,
+                wqi_value = EXCLUDED.wqi_value,
+                wqi_quality = EXCLUDED.wqi_quality,
                 do_value = EXCLUDED.do_value,
-                bod_value = EXCLUDED.bod_value,
-                ammonia_value = EXCLUDED.ammonia_value,
+                ph_value = EXCLUDED.ph_value,
+                nh4_value = EXCLUDED.nh4_value,
+                no2_value = EXCLUDED.no2_value,
+                po4_value = EXCLUDED.po4_value,
+                tss_value = EXCLUDED.tss_value,
+                cod_value = EXCLUDED.cod_value,
+                coliform_value = EXCLUDED.coliform_value,
+                temperature_value = EXCLUDED.temperature_value,
                 latitude = EXCLUDED.latitude,
                 longitude = EXCLUDED.longitude,
                 updated_at = CURRENT_TIMESTAMP;
@@ -329,12 +546,12 @@ def process_batch(df, epoch_id):
                 user=POSTGRES_USER, password=POSTGRES_PASSWORD
             )
             cursor = conn.cursor()
-            execute_values(cursor, gqa_upsert_query, gqa_records)
+            execute_values(cursor, wqi_upsert_query, wqi_records)
             conn.commit()
             cursor.close()
-            print("Upserted GQA batch")
+            print(f"Upserted {len(wqi_records)} WQI records")
         except Exception as e:
-            print(f"Failed to write GQA batch to PostgreSQL: {e}")
+            print(f"Failed to write WQI batch to PostgreSQL: {e}")
         finally:
             if conn is not None:
                 conn.close()
@@ -356,7 +573,7 @@ def process_batch(df, epoch_id):
         print(f"Error during prediction phase: {e}")
 
 def main():
-    """Main execution flow for regional daily averages consumer."""
+    """Main execution flow for regional daily averages consumer with WQI."""
     init_db()
 
     spark = get_spark_session()

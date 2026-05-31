@@ -68,6 +68,10 @@ def get_gqa(start_date, end_date, material):
     return db.get_gqa_data(start_date, end_date, material)
 
 @st.cache_data(ttl=60)
+def get_wqi(start_date, end_date, material):
+    return db.get_wqi_data(start_date, end_date, material)
+
+@st.cache_data(ttl=60)
 def get_station_history(station_id, material, determinand):
     return db.get_station_history(station_id, material, determinand)
 
@@ -76,13 +80,14 @@ def get_station_history(station_id, material, determinand):
 st.title("Water Quality Monitoring Dashboard")
 st.markdown("Real-time analysis and anomaly detection for water quality across England.")
 
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "Historical Trends", 
     "Anomaly Detection Map", 
     "Regional GQA Map", 
     "Model Performance Comparison",
     "GQA Overall Statistics",
-    "AI Predictable Groups Statistics"
+    "AI Predictable Groups Statistics",
+    "Regional WQI Map"
 ])
 
 # --- Tab 1: Historical Trends ---
@@ -232,7 +237,7 @@ with tab2:
                     "station_id": True,
                     "sample_material_type": True
                 },
-                zoom=5.5, center={"lat": 52.8, "lon": -1.5}, height=600,
+                zoom=5.5, center={"lat": 10.381116, "lon":  105.419884}, height=600,
                 title=f"Anomalies from {start_date} to {end_date}"
             )
             fig_map.update_layout(map_style="carto-positron")
@@ -795,6 +800,201 @@ with tab6:
             
             with st.expander("View Determinand Detail"):
                 st.dataframe(det_stats, width='stretch')
+
+# --- Tab 7: Regional WQI Map ---
+with tab7:
+    st.header("Regional Water Quality Index (WQI) — Vietnamese Aquaculture")
+    
+    wqi_meta = db.get_wqi_metadata()
+    if wqi_meta['min_date'] is None:
+        st.info("No WQI data available yet. Make sure `region_consumer_2.py` and `producer2.py` are running.")
+    else:
+        col1, col2 = st.columns(2)
+        with col1:
+            all_dates_wqi = pd.date_range(start=wqi_meta['min_date'], end=wqi_meta['max_date']).date.tolist()
+            if len(all_dates_wqi) > 1:
+                date_range_wqi = st.select_slider("Select Date Range (WQI)", options=all_dates_wqi, value=(min(all_dates_wqi), max(all_dates_wqi)), key="wqi_date")
+                start_date_wqi, end_date_wqi = date_range_wqi
+            else:
+                start_date_wqi = end_date_wqi = all_dates_wqi[0]
+                st.info(f"Showing data for {start_date_wqi}")
+        
+        with col2:
+            wqi_mat_options = [f"{m} ({c})" for m, c in zip(wqi_meta['materials']['sample_material_type'], wqi_meta['materials']['count'])]
+            selected_material_wqi_str = st.selectbox("Select Material Type", ["All"] + wqi_mat_options, key="wqi_mat")
+            selected_material_wqi = selected_material_wqi_str.rsplit(' (', 1)[0] if selected_material_wqi_str != "All" else "All"
+
+        wqi_df = get_wqi(start_date_wqi, end_date_wqi, selected_material_wqi)
+        
+        if wqi_df.empty:
+            st.warning("No WQI data found for the selected filters.")
+        else:
+            # --- KPIs ---
+            st.subheader("Key Performance Indicators")
+            kpi_col1, kpi_col2, kpi_col3, kpi_col4 = st.columns(4)
+            kpi_col1.metric("Total WQI Assessments", len(wqi_df))
+            kpi_col2.metric("Avg WQI Score", f"{wqi_df['wqi_value'].mean():.1f}")
+            kpi_col3.metric("Best WQI", f"{wqi_df['wqi_value'].max():.1f}")
+            kpi_col4.metric("Worst WQI", f"{wqi_df['wqi_value'].min():.1f}")
+            
+            st.divider()
+            
+            # --- WQI Map ---
+            wqi_df = wqi_df.sort_values("wqi_value")
+            color_map_wqi = {
+                'Rất tốt': '#2ecc71',
+                'Tốt': '#27ae60',
+                'Trung bình': '#f1c40f',
+                'Xấu': '#e67e22',
+                'Rất xấu': '#e74c3c'
+            }
+            quality_order = ['Rất tốt', 'Tốt', 'Trung bình', 'Xấu', 'Rất xấu']
+            
+            fig_wqi = px.scatter_map(
+                wqi_df, lat="latitude", lon="longitude", color="wqi_quality",
+                color_discrete_map=color_map_wqi, 
+                category_orders={"wqi_quality": quality_order},
+                zoom=5.5, center={"lat": 10.381116, "lon": 105.419884}, 
+                hover_name="region",
+                hover_data={
+                    "window_start": True, "wqi_value": ":.1f", "wqi_quality": True,
+                    "do_value": ":.2f", "ph_value": ":.2f", "nh4_value": ":.3f",
+                    "cod_value": ":.2f", "tss_value": ":.2f"
+                },
+                height=700, title=f"Regional WQI from {start_date_wqi} to {end_date_wqi}"
+            )
+            fig_wqi.update_layout(map_style="carto-positron")
+            fig_wqi.update_traces(marker=dict(size=20))
+            st.plotly_chart(fig_wqi, width="stretch")
+
+            st.divider()
+            
+            # --- WQI Trend Over Time ---
+            st.subheader("Regional WQI Trends Over Time")
+            trend_wqi_df = wqi_df.copy().sort_values("window_start")
+
+            fig_wqi_trend = px.line(
+                trend_wqi_df,
+                x="window_start",
+                y="wqi_value",
+                color="region",
+                markers=True,
+                title="WQI Score Trends by Region",
+                labels={"wqi_value": "WQI Score (0-100)", "window_start": "Date"},
+                hover_data=["wqi_quality", "do_value", "ph_value", "nh4_value"],
+            )
+            fig_wqi_trend.update_layout(
+                yaxis=dict(range=[0, 105]),
+                shapes=[
+                    dict(type="rect", xref="paper", x0=0, x1=1, yref="y", y0=91, y1=100, fillcolor="#2ecc71", opacity=0.1, line_width=0),
+                    dict(type="rect", xref="paper", x0=0, x1=1, yref="y", y0=76, y1=91, fillcolor="#27ae60", opacity=0.1, line_width=0),
+                    dict(type="rect", xref="paper", x0=0, x1=1, yref="y", y0=51, y1=76, fillcolor="#f1c40f", opacity=0.1, line_width=0),
+                    dict(type="rect", xref="paper", x0=0, x1=1, yref="y", y0=26, y1=51, fillcolor="#e67e22", opacity=0.1, line_width=0),
+                    dict(type="rect", xref="paper", x0=0, x1=1, yref="y", y0=0, y1=26, fillcolor="#e74c3c", opacity=0.1, line_width=0),
+                ]
+            )
+            st.plotly_chart(fig_wqi_trend, width="stretch")
+
+            st.divider()
+            
+            # --- Quality Distribution & Parameter Breakdown ---
+            col_chart1, col_chart2 = st.columns([1, 2])
+            
+            with col_chart1:
+                st.subheader("WQI Quality Distribution")
+                quality_counts = wqi_df['wqi_quality'].value_counts().reset_index()
+                quality_counts.columns = ['WQI Quality', 'Count']
+                
+                fig_wqi_pie = px.pie(
+                    quality_counts, 
+                    names='WQI Quality', 
+                    values='Count',
+                    color='WQI Quality',
+                    color_discrete_map=color_map_wqi,
+                    category_orders={"WQI Quality": quality_order},
+                    hole=0.4,
+                    title="Proportion of Water Quality Levels"
+                )
+                st.plotly_chart(fig_wqi_pie, width='stretch')
+            
+            with col_chart2:
+                st.subheader("Water Quality Parameter Spread by Quality Level")
+                param_choice_wqi = st.radio(
+                    "Select parameter to analyze:",
+                    ["DO (mg/L)", "pH", "N-NH4 (mg/L)", "N-NO2 (mg/L)", "COD (mg/L)", "TSS (mg/L)", "Coliform (MPN/100mL)", "Temperature (°C)"],
+                    horizontal=True,
+                    key="wqi_param_radio"
+                )
+                
+                param_col_map = {
+                    "DO (mg/L)": "do_value",
+                    "pH": "ph_value",
+                    "N-NH4 (mg/L)": "nh4_value",
+                    "N-NO2 (mg/L)": "no2_value",
+                    "COD (mg/L)": "cod_value",
+                    "TSS (mg/L)": "tss_value",
+                    "Coliform (MPN/100mL)": "coliform_value",
+                    "Temperature (°C)": "temperature_value",
+                }
+                y_col_wqi = param_col_map[param_choice_wqi]
+                
+                fig_box_wqi = px.box(
+                    wqi_df,
+                    x='wqi_quality',
+                    y=y_col_wqi,
+                    color='wqi_quality',
+                    color_discrete_map=color_map_wqi,
+                    category_orders={"wqi_quality": quality_order},
+                    title=f"{param_choice_wqi} levels across WQI Quality Levels",
+                    points="outliers"
+                )
+                st.plotly_chart(fig_box_wqi, width='stretch')
+            
+            st.divider()
+            
+            # --- Region Breakdown ---
+            col_chart3, col_chart4 = st.columns(2)
+            
+            with col_chart3:
+                st.subheader("WQI Quality Breakdown by Region")
+                region_quality = wqi_df.groupby(['region', 'wqi_quality']).size().reset_index(name='count')
+                fig_reg_wqi = px.bar(
+                    region_quality,
+                    x='region',
+                    y='count',
+                    color='wqi_quality',
+                    color_discrete_map=color_map_wqi,
+                    category_orders={"wqi_quality": quality_order},
+                    title="Assessments Count by Region & Quality Level",
+                    barmode="stack"
+                )
+                st.plotly_chart(fig_reg_wqi, width='stretch')
+            
+            with col_chart4:
+                st.subheader("Average Metrics by Quality Level")
+                avg_metrics_wqi = wqi_df.groupby('wqi_quality').agg(
+                    avg_wqi=('wqi_value', 'mean'),
+                    avg_do=('do_value', 'mean'),
+                    avg_ph=('ph_value', 'mean'),
+                    avg_nh4=('nh4_value', 'mean'),
+                    avg_cod=('cod_value', 'mean'),
+                    assessments_count=('wqi_quality', 'count')
+                ).reset_index()
+                
+                st.dataframe(
+                    avg_metrics_wqi.style.format({
+                        'avg_wqi': '{:.1f}',
+                        'avg_do': '{:.2f} mg/L',
+                        'avg_ph': '{:.2f}',
+                        'avg_nh4': '{:.3f} mg/L',
+                        'avg_cod': '{:.2f} mg/L',
+                        'assessments_count': '{:,.0f}'
+                    }),
+                    width='stretch'
+                )
+            
+            with st.expander("View Filtered WQI Raw Data"):
+                st.dataframe(wqi_df.sort_values('window_start', ascending=False), width='stretch')
 
 st.markdown("---")
 st.caption("Data is cached for 60 seconds.")
